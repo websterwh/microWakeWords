@@ -19,6 +19,7 @@
 #endif
 
 #include <esp_http_client.h>
+#include <esp_heap_caps.h>
 
 #include <cJSON.h>
 #include <algorithm>
@@ -1610,7 +1611,9 @@ std::string MicroWakeWord::build_capture_upload_url_() const {
   return this->capture_upload_url_ + RAW_CAPTURE_PATH;
 }
 
-bool MicroWakeWord::snapshot_capture_audio_(std::vector<uint8_t> &audio_bytes) {
+bool MicroWakeWord::snapshot_capture_audio_(std::unique_ptr<uint8_t, decltype(&std::free)> &audio_bytes,
+                                            size_t &audio_size) {
+  audio_size = 0;
   std::shared_ptr<RingBuffer> temp_capture_ring_buffer = this->capture_ring_buffer_;
   if (temp_capture_ring_buffer == nullptr) {
     return false;
@@ -1621,17 +1624,20 @@ bool MicroWakeWord::snapshot_capture_audio_(std::vector<uint8_t> &audio_bytes) {
     return false;
   }
 
-  audio_bytes.resize(bytes_available);
-  const size_t bytes_read = temp_capture_ring_buffer->read(audio_bytes.data(), bytes_available, 0);
-  if (bytes_read == 0) {
-    audio_bytes.clear();
+  // Keep the large PCM snapshot out of the internal heap needed by the voice pipeline.
+  // A failed allocation must skip capture rather than throw std::bad_alloc and abort.
+  uint8_t *buffer = static_cast<uint8_t *>(heap_caps_malloc(bytes_available, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (buffer == nullptr) {
+    ESP_LOGW(TAG, "Skipping captured audio: PSRAM allocation of %u bytes failed.",
+             static_cast<unsigned int>(bytes_available));
     return false;
   }
-
-  if (bytes_read < bytes_available) {
-    audio_bytes.resize(bytes_read);
+  audio_bytes.reset(buffer);
+  audio_size = temp_capture_ring_buffer->read(audio_bytes.get(), bytes_available, 0);
+  if (audio_size == 0) {
+    audio_bytes.reset();
+    return false;
   }
-
   return true;
 }
 
@@ -1659,8 +1665,9 @@ void MicroWakeWord::queue_detection_capture_(const DetectionEvent &detection_eve
     return;
   }
 
-  std::vector<uint8_t> pcm_data;
-  if (!this->snapshot_capture_audio_(pcm_data)) {
+  std::unique_ptr<uint8_t, decltype(&std::free)> pcm_data{nullptr, &std::free};
+  size_t pcm_size = 0;
+  if (!this->snapshot_capture_audio_(pcm_data, pcm_size)) {
     this->capture_upload_in_progress_.store(false);
     ESP_LOGW(TAG,
              "Captured wake audio upload skipped because the wake-audio ring buffer was empty. "
@@ -1674,6 +1681,7 @@ void MicroWakeWord::queue_detection_capture_(const DetectionEvent &detection_eve
   request->source_device = App.get_name().c_str();
   request->wake_word = detection_event.wake_word == nullptr ? "" : *detection_event.wake_word;
   request->pcm_data = std::move(pcm_data);
+  request->pcm_size = pcm_size;
   request->max_probability = detection_event.max_probability;
   request->average_probability = detection_event.average_probability;
   request->probability_cutoff = detection_event.probability_cutoff;
@@ -1717,7 +1725,7 @@ bool MicroWakeWord::upload_capture_(const CaptureUploadRequest &request) {
     return false;
   }
 
-  if (request.pcm_data.empty()) {
+  if (request.pcm_size == 0 || request.pcm_data == nullptr) {
     ESP_LOGW(TAG, "Captured wake audio upload skipped because the buffered clip was empty.");
     return false;
   }
@@ -1772,7 +1780,7 @@ bool MicroWakeWord::upload_capture_(const CaptureUploadRequest &request) {
   esp_http_client_set_header(client, "X-Detection-Profile", request.detection_profile.c_str());
   esp_http_client_set_header(client, "X-Probability-History", request.probability_history.c_str());
 
-  esp_err_t err = esp_http_client_open(client, request.pcm_data.size());
+  esp_err_t err = esp_http_client_open(client, request.pcm_size);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Captured wake audio upload failed while opening HTTP connection: %s", esp_err_to_name(err));
     esp_http_client_cleanup(client);
@@ -1780,9 +1788,9 @@ bool MicroWakeWord::upload_capture_(const CaptureUploadRequest &request) {
   }
 
   size_t bytes_written = 0;
-  const char *payload = reinterpret_cast<const char *>(request.pcm_data.data());
-  while (bytes_written < request.pcm_data.size()) {
-    const size_t remaining = request.pcm_data.size() - bytes_written;
+  const char *payload = reinterpret_cast<const char *>(request.pcm_data.get());
+  while (bytes_written < request.pcm_size) {
+    const size_t remaining = request.pcm_size - bytes_written;
     const size_t chunk_size = std::min(remaining, CAPTURE_UPLOAD_BUFFER_SIZE);
     const int written = esp_http_client_write(client, payload + bytes_written, chunk_size);
     if (written <= 0) {
@@ -1807,7 +1815,7 @@ bool MicroWakeWord::upload_capture_(const CaptureUploadRequest &request) {
   }
 
   ESP_LOGI(TAG, "Uploaded captured wake audio for '%s' (%u bytes) to trainer.", request.wake_word.c_str(),
-           static_cast<unsigned int>(request.pcm_data.size()));
+           static_cast<unsigned int>(request.pcm_size));
   return true;
 }
 
