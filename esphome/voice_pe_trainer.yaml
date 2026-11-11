@@ -1,0 +1,132 @@
+# Voice PE microWakeWord trainer integration.
+# The actual micro_wake_word model and its probability_cutoff belong in the device YAML.
+substitutions:
+  mww_trainer_url: "http://192.168.1.2:8789"
+  mww_model_manifest_path: "/api/trained_wake_words/alexa.esphome.json"
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/websterwh/microWakeWords
+      ref: af694a65937dda079a7ca1da1724473c5dbf799e
+      path: shared/components
+    components:
+      - micro_wake_word
+    refresh: always
+
+api:
+  on_client_connected:
+    - lambda: |-
+        id(mww).set_capture_upload_enabled(id(capture_wake_audio).state);
+        id(mww).set_capture_close_misses_enabled(id(capture_close_misses).state);
+        id(mww).set_capture_upload_url(id(trainer_app_url).state);
+
+text_sensor:
+  - platform: template
+    name: "Alexa Runtime Model"
+    id: alexa_runtime_model
+    icon: mdi:brain
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      const auto &active = id(mww).get_active_runtime_wake_word();
+      return active.empty() ? std::string("Compiled") : active;
+    filters:
+      - lambda: |-
+          static std::string last_value;
+          if (x == last_value) return {};
+          last_value = x;
+          return x;
+
+  - platform: template
+    name: "Alexa Model Update Status"
+    id: alexa_model_update_status
+    icon: mdi:cloud-sync
+    entity_category: diagnostic
+    update_interval: 1s
+    lambda: |-
+      return {id(mww).get_runtime_model_update_status()};
+    filters:
+      - lambda: |-
+          static std::string last_value;
+          if (x == last_value) return {};
+          last_value = x;
+          return x;
+
+sensor:
+  - platform: template
+    name: "Alexa Model Update Count"
+    id: alexa_model_update_count
+    icon: mdi:counter
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: |-
+      return id(mww).get_runtime_model_update_count();
+    filters:
+      - delta: 1
+
+button:
+  - platform: template
+    name: "Update Alexa Wake Word Model"
+    id: update_alexa_model
+    icon: mdi:download
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(mww).set_runtime_model_url(
+            "${mww_trainer_url}${mww_model_manifest_path}"
+          );
+
+  - platform: template
+    name: "Restore Compiled Wake Word Model"
+    id: restore_compiled_model
+    icon: mdi:backup-restore
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(mww).set_runtime_model_url("compiled");
+
+switch:
+  - platform: template
+    id: capture_wake_audio
+    name: "Capture Wake Audio"
+    icon: mdi:waveform
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(mww).set_capture_upload_enabled(true);
+    turn_off_action:
+      - lambda: |-
+          id(mww).set_capture_upload_enabled(false);
+
+  - platform: template
+    id: capture_close_misses
+    name: "Capture Close Misses"
+    icon: mdi:target
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(mww).set_capture_close_misses_enabled(true);
+    turn_off_action:
+      - lambda: |-
+          id(mww).set_capture_close_misses_enabled(false);
+
+text:
+  - platform: template
+    id: trainer_app_url
+    name: "Trainer App URL"
+    icon: mdi:lan-connect
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "${mww_trainer_url}"
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: |-
+          id(mww).set_capture_upload_url(x);
