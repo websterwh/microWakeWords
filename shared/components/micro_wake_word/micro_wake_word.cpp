@@ -1377,12 +1377,22 @@ bool MicroWakeWord::write_runtime_model_from_url_(const std::string &url) {
   return true;
 }
 
+const char *MicroWakeWord::get_runtime_model_update_status() const {
+  switch (this->runtime_model_update_status_.load()) {
+    case 1: return "updating";
+    case 2: return "success";
+    case 3: return "failed";
+    default: return "idle";
+  }
+}
+
 void MicroWakeWord::set_runtime_model_url(const std::string &runtime_model_url) {
   if (this->runtime_model_update_in_progress_.exchange(true)) {
     ESP_LOGW(TAG, "Runtime microWakeWord model update is already in progress.");
     return;
   }
 
+  this->runtime_model_update_status_.store(1);
   auto *request = new RuntimeModelUpdateRequest();
   request->parent = this;
   request->url = runtime_model_url;
@@ -1390,6 +1400,8 @@ void MicroWakeWord::set_runtime_model_url(const std::string &runtime_model_url) 
   BaseType_t task_created =
       xTaskCreate(MicroWakeWord::runtime_model_update_task, "mww_model_update", 12288, request, 2, nullptr);
   if (task_created != pdPASS) {
+    this->runtime_model_update_status_.store(3);
+    this->runtime_model_update_count_.fetch_add(1);
     this->runtime_model_update_in_progress_.store(false);
     delete request;
     ESP_LOGW(TAG, "Failed to start runtime microWakeWord model update task.");
@@ -1405,6 +1417,8 @@ void MicroWakeWord::runtime_model_update_task(void *params) {
 
   const bool success = request->parent->write_runtime_model_from_url_(request->url);
   ESP_LOGI(TAG, "Runtime microWakeWord model update %s.", success ? "finished" : "failed");
+  request->parent->runtime_model_update_status_.store(success ? 2 : 3);
+  request->parent->runtime_model_update_count_.fetch_add(1);
   request->parent->runtime_model_update_in_progress_.store(false);
   delete request;
 
