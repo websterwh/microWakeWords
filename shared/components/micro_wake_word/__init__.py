@@ -475,6 +475,8 @@ async def to_code(config):
     cg.add_build_flag("-DTF_LITE_DISABLE_X86_NEON")
     cg.add_build_flag("-DESP_NN")
     esp32.include_builtin_idf_component("esp_http_client")
+    # Audio capture uses cJSON from the built-in ESP-IDF json component.
+    esp32.include_builtin_idf_component("json")
     esp32.add_idf_sdkconfig_option("CONFIG_MBEDTLS_CERTIFICATE_BUNDLE", True)
     _add_runtime_model_partition("mww_model_a", 0x40)
     _add_runtime_model_partition("mww_model_b", 0x41)
