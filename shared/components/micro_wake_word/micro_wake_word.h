@@ -25,6 +25,8 @@
 #include <frontend_util.h>
 #include <string>
 #include <vector>
+#include <memory>
+#include <cstdlib>
 
 namespace esphome {
 namespace micro_wake_word {
@@ -48,7 +50,8 @@ class MicroWakeWord : public Component
     std::string upload_url;
     std::string source_device;
     std::string wake_word;
-    std::vector<uint8_t> pcm_data;
+    std::unique_ptr<uint8_t, decltype(&std::free)> pcm_data{nullptr, &std::free};
+    size_t pcm_size = 0;
     uint8_t max_probability;
     uint8_t average_probability;
     uint8_t probability_cutoff;
@@ -280,7 +283,7 @@ class MicroWakeWord : public Component
   void clear_pending_close_miss_(const std::string *wake_word = nullptr);
   void flush_pending_close_miss_();
   std::string build_capture_upload_url_() const;
-  bool snapshot_capture_audio_(std::vector<uint8_t> &audio_bytes);
+  bool snapshot_capture_audio_(std::unique_ptr<uint8_t, decltype(&std::free)> &audio_bytes, size_t &audio_size);
   void queue_detection_capture_(const DetectionEvent &detection_event, DetectionEventType event_type);
   bool upload_capture_(const CaptureUploadRequest &request);
   static void capture_upload_task(void *params);
