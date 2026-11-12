@@ -1,6 +1,7 @@
 DOMAIN = "mww_trainer"
 CONF_URL = "url"
 CONF_MODEL = "model"
+CONF_DEVICE = "device"
 CONF_BUTTON = "update_button"
 CONF_STATUS = "status_entity"
 CONF_COUNT = "count_entity"
