@@ -14,8 +14,9 @@ class TrainerAutomaticUpdates(CoordinatorEntity, SwitchEntity):
     _attr_name = "Automatic model updates"
     _attr_icon = "mdi:cloud-sync"
 
-    def __init__(self, coordinator, entry):
-        super().__init__(coordinator)
+    def __init__(self, coordinators, entry):
+        super().__init__(coordinators[0])
+        self.coordinators = coordinators
         self._attr_unique_id = f"{entry.entry_id}_auto_update"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
@@ -26,15 +27,18 @@ class TrainerAutomaticUpdates(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self):
-        return self.coordinator.automatic
+        return bool(self.coordinators) and all(coordinator.automatic for coordinator in self.coordinators)
 
     async def async_turn_on(self, **kwargs):
-        self.coordinator.automatic = True
-        await self.coordinator.save()
+        for coordinator in self.coordinators:
+            coordinator.automatic = True
+            await coordinator.save()
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
+        for coordinator in self.coordinators:
+            await coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs):
-        self.coordinator.automatic = False
-        await self.coordinator.save()
+        for coordinator in self.coordinators:
+            coordinator.automatic = False
+            await coordinator.save()
         self.async_write_ha_state()
