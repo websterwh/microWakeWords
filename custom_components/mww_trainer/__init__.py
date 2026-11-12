@@ -32,7 +32,7 @@ class TrainerCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, device_id=None):
         super().__init__(
             hass, _LOGGER, name="microWakeWord Trainer",
-            update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
+            update_interval=None,
         )
         self.entry = entry
         self.device_id = device_id
@@ -194,12 +194,6 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 except HomeAssistantError as err:
                     device_ready = False
                     _LOGGER.info("Wake-word satellite %s not ready for synchronization: %s", self.device_id, err)
-            # If device wasn't ready, schedule a faster retry (30s) so the user
-            # sees correct state quickly after reboot/reflash.
-            if not device_ready:
-                self.update_interval = timedelta(seconds=30)
-            elif self.update_interval != timedelta(seconds=SCAN_INTERVAL_SECONDS):
-                self.update_interval = timedelta(seconds=SCAN_INTERVAL_SECONDS)
             return {
                 "hash": digest, "manifest": manifest_url,
                 "manifest_json": manifest_json, "model_bytes": model_bytes,
@@ -314,6 +308,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinators
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Explicit periodic refresh: HA's built-in scheduler is unreliable because
+    # it only starts after the first CoordinatorEntity listener is added (which
+    # happens after platform setup, i.e., after the initial refresh). We use
+    # async_track_time_interval for a reliable 5-minute polling cadence.
+    for coordinator in coordinators:
+        async def periodic_refresh(current=coordinator):
+            try:
+                await current.async_refresh()
+            except Exception:
+                _LOGGER.exception("Periodic refresh failed for %s", current.device_id)
+        entry.async_on_unload(async_track_time_interval(
+            hass, periodic_refresh, timedelta(seconds=SCAN_INTERVAL_SECONDS)
+        ))
+
     for coordinator in coordinators:
         async def check_auto(current=coordinator):
             if (current.automatic and current.last_update_success and
@@ -354,7 +362,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ids = [entities[role] for role in (CONF_TARGETS, CONF_MANIFEST)]
             if entities.get("runtime_hash_entity"):
                 ids.append(entities["runtime_hash_entity"])
-            def on_entity_state_change(event, current=coordinator):
+            async def on_entity_state_change(event, current=coordinator):
                 new_state = event.data.get("new_state")
                 old_state = event.data.get("old_state")
                 old_s = old_state.state if old_state is not None else None
@@ -373,7 +381,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "requesting coordinator refresh for %s",
                         event.data.get("entity_id"), new_s, current.device_id,
                     )
-                    hass.async_create_task(current.async_request_refresh())
+                    await current.async_request_refresh()
                 # Fingerprint changes (including a manual model deployment
                 # or a device reboot/reflash) should trigger a full coordinator
                 # refresh to re-verify the installed model against the trainer.
@@ -392,7 +400,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         'appeared' if old_s is None else 'changed',
                         current.device_id, old_s, new_s,
                     )
-                    hass.async_create_task(current.async_request_refresh())
+                    await current.async_request_refresh()
             entry.async_on_unload(async_track_state_change_event(
                 hass, ids, on_entity_state_change
             ))
