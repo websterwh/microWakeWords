@@ -309,14 +309,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Retry as soon as a required ESPHome entity becomes available.
             # Home Assistant may restore its registry before an ESPHome device
             # has published its first text state.
-            roles = (CONF_TARGETS, CONF_MANIFEST)
-            ids = [configured_entities(hass, coordinator.settings)[role] for role in roles]
+            entities = configured_entities(hass, coordinator.settings)
+            ids = [entities[role] for role in (CONF_TARGETS, CONF_MANIFEST)]
+            if entities.get("runtime_hash_entity"):
+                ids.append(entities["runtime_hash_entity"])
             def on_entity_state_change(event, current=coordinator):
                 new_state = event.data.get("new_state")
                 old_state = event.data.get("old_state")
                 if (new_state is not None and new_state.state not in ("unavailable", "unknown")
                         and (old_state is None or old_state.state in ("unavailable", "unknown"))):
                     hass.async_create_task(current.async_request_refresh())
+                # Fingerprint changes (including a manual model deployment)
+                # should update Home Assistant's update entity immediately.
+                if (event.data.get("entity_id") == configured_entities(hass, current.settings).get("runtime_hash_entity")
+                        and new_state is not None
+                        and (old_state is None or old_state.state != new_state.state)):
+                    current.async_update_listeners()
             entry.async_on_unload(async_track_state_change_event(
                 hass, ids, on_entity_state_change
             ))
