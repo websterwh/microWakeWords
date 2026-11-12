@@ -93,8 +93,8 @@ class TrainerCoordinator(DataUpdateCoordinator):
             # training targets from all compiled firmware models.
             extra = [word.strip() for word in self.settings.get(CONF_EXTRA_TARGETS, "").split(",") if word.strip()]
             targets = list(dict.fromkeys(([phrase] if phrase else []) + extra))
-            if not targets:
-                raise UpdateFailed("No active training target is configured")
+            # No configured target means no audio capture, not a reason to
+            # prevent the user from deploying an otherwise valid model.
             # Synchronize the allowlist and destination BEFORE allowing uploads.
             await self._set_text(CONF_TARGETS, ",".join(targets), "_last_targets")
             await self._set_text(CONF_MANIFEST, manifest, "_last_manifest")
