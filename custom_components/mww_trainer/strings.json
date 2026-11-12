@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect microWakeWord Trainer",
+        "description": "Select a compatible satellite. ESPHome devices with this trainer package can update live. EchoLocal and techo5 use Home Assistant's custom wake-word catalog (Home Assistant restart and wake-word selection required).",
+        "data": {
+          "url": "Trainer URL",
+          "model": "Wake word / model name",
+          "device": "Wake-word devices (select multiple)",
+          "extra_targets": "Additional training target phrases (optional)",
+          "automatic_updates": "Automatically publish or deploy model updates"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "Enter a valid HTTP(S) URL",
+      "missing_model": "Enter a wake-word or model name",
+      "unsupported_device": "This device has no supported wake-word update method. Select an ESPHome trainer device, EchoLocal, or techo5."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure trainer",
+        "data": {
+          "url": "Trainer URL",
+          "model": "Wake word / model name",
+          "device": "Wake-word devices (select multiple)",
+          "extra_targets": "Additional training phrases",
+          "automatic_updates": "Automatic model updates"
+        }
+      }
+    },
+    "error": {
+      "unsupported_device": "The selected device is not supported."
+    }
+  }
+}
