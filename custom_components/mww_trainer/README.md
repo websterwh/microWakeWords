@@ -8,7 +8,7 @@ In **Settings → Devices & services → Add integration → microWakeWord Train
 
 1. **Trainer URL** (the address Home Assistant can reach).
 2. **Wake word / model name** (trainer catalog key or display name, such as Alexa).
-3. **Wake-word device** (the device running ESPHome's trainer package, EchoLocal, or techo5).
+3. **Wake-word devices** (select one or multiple ESPHome trainer devices, EchoLocal or techo5 satellites).
 4. Optional additional training target phrases and automatic update mode.
 
 You do **not** need to select individual entity IDs. For direct ESPHome devices the integration discovers the update button, update status, update counter, model manifest text field, and active-target text field from the chosen device. Compatible devices are detected by available features, not by Voice PE model name.
@@ -32,3 +32,9 @@ The integration compares trained model SHA-256 checksums every five minutes. In 
 For ESPHome capture, the trainer's `/api/auto_train` primary wake phrase plus explicitly listed optional additional phrases forms the allowlist. This prevents unrelated compiled wake words, including auxiliary words such as Stop, from being uploaded simply because they are loaded. Normal detection, timers, and voice pipelines are unchanged. This is not automatic discovery of both Home Assistant-selected assistant wake-word slots: any second training-target phrase must currently be entered explicitly.
 
 Keep the old hash automation disabled while testing, and turn on automatic updates only after a successful manual test.
+
+## Version 0.3.0 migration and trainer errors
+
+After installing the Marketplace update, restart Home Assistant to reload the configuration-flow labels from `strings.json`. The setup and options flow now lets you select **multiple devices**. For an existing entry, use **Configure** to revise its selected devices. Each device has a separate native update entity; the automatic-updates switch applies to all devices in the trainer/model entry.
+
+A trainer-side HTTP 500 on `/api/trained_wake_words/<model>.esphome.json` no longer prevents initial integration setup. The integration continues syncing training targets and tries the canonical `.wake-bundle.json` for catalog metadata. **Direct ESPHome model updates still require a working manifest endpoint**; the update entity reports its error and does not mark an installation successful. Check the trainer container's server traceback and repair/restart the trainer when that endpoint returns 500. Firmware does not need reflashing for these Home Assistant integration changes.
