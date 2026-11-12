@@ -1679,11 +1679,21 @@ void MicroWakeWord::set_capture_training_targets(const std::string &targets) {
 
 bool MicroWakeWord::is_capture_training_target_(const std::string *wake_word) const {
   if (wake_word == nullptr || this->capture_training_targets_.empty()) return false;
-  // Do not capture auxiliary/internal or temporarily disabled wake words.
+  // Model labels and trainer phrases may differ in capitalization.
+  auto same_phrase = [](const std::string &left, const std::string &right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(left[i])) !=
+          std::tolower(static_cast<unsigned char>(right[i]))) return false;
+    }
+    return true;
+  };
+  // Match a specifically enabled, exposed wake word, never an auxiliary stop command.
   for (auto *model : this->wake_word_models_) {
     if (model->get_wake_word() == *wake_word && model->is_enabled() && !model->get_internal_only()) {
-      return std::find(this->capture_training_targets_.begin(), this->capture_training_targets_.end(),
-                       *wake_word) != this->capture_training_targets_.end();
+      for (const auto &target : this->capture_training_targets_) {
+        if (same_phrase(target, *wake_word)) return true;
+      }
     }
   }
   return false;
