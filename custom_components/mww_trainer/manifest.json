@@ -1,0 +1,10 @@
+{
+  "domain": "mww_trainer",
+  "name": "microWakeWord Trainer",
+  "version": "0.1.0",
+  "documentation": "https://github.com/websterwh/microWakeWords",
+  "issue_tracker": "https://github.com/websterwh/microWakeWords/issues",
+  "requirements": [],
+  "config_flow": true,
+  "iot_class": "local_polling"
+}
