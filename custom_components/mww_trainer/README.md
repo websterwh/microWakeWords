@@ -66,3 +66,7 @@ The ledger records the first revision ever seen as a **baseline**. Only a revisi
 The 12-character abbreviations are now display-only (`installed_version_short`, `latest_version_short`, `release_summary`). This release also fixes a model download that could hash a truncated prefix of the `.tflite`, which produced phantom revisions: the body is read to EOF and checked against `Content-Length`.
 
 Training capture targets come from the trainer's **active wake-word library selection** (`/api/wake_word_library` with `active: true`) plus explicitly configured additional phrases, rather than requiring auto-training to be enabled. An empty target list continues to disable capture. These changes require updating the **Home Assistant integration only**, not another ESPHome flash. The Voice PE's native entity list remains visible on its device page; the integration operates those entities automatically rather than changing their presentation.
+
+## Version 0.4.6: shorter versions on the device page
+
+Home Assistant prints the update entity's installed and latest version on the device page, so a full 64-character digest fills that row. Both strings are now the 12-character display form (for example `342c5ec7ce38`). Installed and latest still shorten identically, so equality between them is unchanged, and `has_update` still comes from the revision ledger. Full digests remain available in the entity attributes (`trainer_model_hash`, `installed_hash`, `baseline_hash`) and decide every revision comparison; nothing is truncated internally.

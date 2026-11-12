@@ -46,18 +46,19 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
 
     @property
     def installed_version(self):
-        """Full digest the satellite reports, or None while unknown.
+        """Display form of the digest the satellite reports, or None if unknown.
 
-        HA derives entity state from these two properties: with an unknown
-        installed digest the state stays ``unknown`` rather than claiming the
-        satellite is up to date.
+        Home Assistant renders this string on the device page, where a full
+        64-character digest dominates the row. Only the display length is
+        shortened; the full digest stays in ``installed_hash`` and in the
+        revision ledger, and every comparison uses those full values.
         """
-        return self._status.installed_hash
+        return abbreviate(self._status.installed_hash)
 
     @property
     def latest_version(self):
-        """Full digest of the trainer's newest published model revision."""
-        return self._status.trainer_hash
+        """Display form of the trainer's newest published model revision."""
+        return abbreviate(self._status.trainer_hash)
 
     @property
     def has_update(self):
@@ -91,6 +92,7 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
         attributes = {
             "delivery": "ESPHome runtime update",
             "trainer_model_hash": status.trainer_hash,
+            "installed_hash": status.installed_hash,
             "installed_version_short": abbreviate(status.installed_hash),
             "latest_version_short": abbreviate(status.trainer_hash),
             "baseline_hash": status.baseline_hash,
