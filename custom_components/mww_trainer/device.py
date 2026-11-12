@@ -1,53 +1,86 @@
-"""Resolve the trainer's ESPHome entities from one selected Home Assistant device."""
+"""Discover device capabilities using HA registries, never hardcoded device IDs."""
 from __future__ import annotations
 
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import CONF_BUTTON, CONF_STATUS, CONF_COUNT, CONF_TARGETS, CONF_MANIFEST, CONF_DEVICE
+from .const import CONF_DEVICE, CONF_BUTTON, CONF_STATUS, CONF_COUNT, CONF_TARGETS, CONF_MANIFEST
 
-# Prefer ESPHome's original entity name, which remains stable when the user
-# customizes Home Assistant entity IDs and friendly names.
 REQUIRED = {
-    CONF_BUTTON: ("button", "update", "wake", "model"),
-    CONF_STATUS: ("sensor", "model", "update", "status"),
-    CONF_COUNT: ("sensor", "model", "update", "count"),
-    CONF_TARGETS: ("text", "trainer", "active", "wake", "words"),
-    CONF_MANIFEST: ("text", "trainer", "model", "manifest", "url"),
+    CONF_BUTTON: ("button", ("update", "wake", "word", "model")),
+    CONF_STATUS: ("sensor", ("model", "update", "status")),
+    CONF_COUNT: ("sensor", ("model", "update", "count")),
+    CONF_TARGETS: ("text", ("trainer", "active", "wake", "words")),
+    CONF_MANIFEST: ("text", ("trainer", "model", "manifest", "url")),
 }
 
 
-def resolve_device_entities(hass, device_id: str) -> dict[str, str]:
-    """Return all five trainer entities, or raise an informative error.
+class UnsupportedDevice(ValueError):
+    """Selected device lacks a supported trainer deployment method."""
 
-    The names are matched by purpose, not by the wake-word name (Alexa, etc.).
-    Restrict matching to entities belonging to the selected device.
-    """
-    registry = er.async_get(hass)
-    entries = er.async_entries_for_device(registry, device_id)
-    results = {}
-    for role, words in REQUIRED.items():
-        domain, *tokens = words
-        matches = []
-        for item in entries:
-            if item.disabled_by or item.entity_id.split(".", 1)[0] != domain:
-                continue
-            display = (item.original_name or "").casefold().replace("_", " ")
-            fallback = item.entity_id.split(".", 1)[-1].casefold().replace("_", " ")
-            if all(token in display.split() for token in tokens) or (
-                not item.original_name and all(token in fallback.split() for token in tokens)
-            ):
-                matches.append(item.entity_id)
-        if len(matches) != 1:
-            raise ValueError(
-                f"Expected one {role} on the selected ESPHome device, found {len(matches)}. "
-                "Ensure the updated ESPHome trainer package is installed and entities are enabled."
+
+def _description(entry):
+    return " ".join(str(x or "") for x in (
+        entry.original_name, entry.entity_id, entry.original_device_class
+    )).lower().replace("_", " ")
+
+
+def direct_entities(hass, device_id):
+    """Return exact unique ESPHome trainer entities or None."""
+    entities = er.async_entries_for_device(er.async_get(hass), device_id)
+    found = {}
+    for role, (domain, tokens) in REQUIRED.items():
+        matches = [
+            e.entity_id for e in entities
+            if not e.disabled_by and e.entity_id.startswith(domain + ".")
+            and (
+                (role == CONF_BUTTON and "update" in _description(e)
+                 and "model" in _description(e) and "wake" in _description(e))
+                or (role != CONF_BUTTON and all(token in _description(e) for token in tokens))
             )
-        results[role] = matches[0]
-    return results
+        ]
+        if len(matches) != 1:
+            return None
+        found[role] = matches[0]
+    return found
 
 
-def configured_entities(hass, settings: dict) -> dict[str, str]:
-    """Resolve device-based entries, retaining backwards compatibility."""
+def device_adapter(hass, device_id):
+    """Prefer direct firmware API, otherwise recognize compatible satellite stacks."""
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        raise UnsupportedDevice("Device no longer exists")
+    direct = direct_entities(hass, device_id)
+    if direct:
+        return "esphome", direct
+
+    # EchoLocal and techo5 expose the native ESPHome API, but not our custom
+    # runtime update/capture entities. They consume HA custom_wake_words.
+    # Some subdevices have no manufacturer, so walk their actual parent.
+    current = device
+    for _ in range(4):
+        identity = " ".join(str(x or "") for x in (
+            current.manufacturer, current.model, current.name,
+            current.name_by_user, *[ident[0] for ident in current.identifiers]
+        )).casefold()
+        if "echolocal" in identity or "echo local" in identity:
+            return "ha_catalog", {}
+        if "techo5" in identity or "husker" in identity:
+            return "ha_catalog", {}
+        if not current.via_device_id:
+            break
+        current = dr.async_get(hass).async_get(current.via_device_id)
+        if current is None:
+            break
+    raise UnsupportedDevice(
+        "Select an ESPHome device running the trainer package, or an EchoLocal/techo5 device."
+    )
+
+
+def configured_entities(hass, settings):
+    """Resolve device-based configurations, including older explicit-entity entries."""
     if settings.get(CONF_DEVICE):
-        return resolve_device_entities(hass, settings[CONF_DEVICE])
+        adapter, entities = device_adapter(hass, settings[CONF_DEVICE])
+        if adapter != "esphome":
+            raise UnsupportedDevice("This device receives models through Home Assistant's catalog")
+        return entities
     return {role: settings[role] for role in REQUIRED}
