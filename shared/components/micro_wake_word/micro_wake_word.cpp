@@ -1544,8 +1544,9 @@ bool MicroWakeWord::capture_feature_enabled_() const {
 }
 
 bool MicroWakeWord::should_capture_close_miss_(const DetectionEvent &detection_event) {
-  if (!this->capture_close_misses_enabled_.load() ||
-      !this->is_capture_training_target_(detection_event.wake_word)) {
+  // This runs in the inference task. Do not access the main-loop-owned
+  // target vector here; filter both event types at queue_detection_capture_.
+  if (!this->capture_close_misses_enabled_.load()) {
     return false;
   }
 
