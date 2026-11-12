@@ -55,4 +55,4 @@ def _write_pair(root: Path, name: str, manifest: dict, model: bytes):
 async def publish(hass, name: str, manifest: dict, model: bytes):
     """Write under HA's config directory using an executor."""
     destination = Path(hass.config.path("custom_wake_words"))
-    return await hass.async_add_executor_job(_write_pair, destination, name, manifest, model)
+    return await hass.async_add_executor_job(_write_pair, destination, "mww_trainer_" + name, manifest, model)
