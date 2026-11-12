@@ -1544,7 +1544,8 @@ bool MicroWakeWord::capture_feature_enabled_() const {
 }
 
 bool MicroWakeWord::should_capture_close_miss_(const DetectionEvent &detection_event) {
-  if (!this->capture_close_misses_enabled_.load()) {
+  if (!this->capture_close_misses_enabled_.load() ||
+      !this->is_capture_training_target_(detection_event.wake_word)) {
     return false;
   }
 
@@ -1655,7 +1656,40 @@ bool MicroWakeWord::snapshot_capture_audio_(std::unique_ptr<uint8_t, decltype(&s
   return true;
 }
 
+void MicroWakeWord::set_capture_training_targets(const std::string &targets) {
+  // Updated from ESPHome's main loop; capture decisions are made on that same loop.
+  std::vector<std::string> parsed;
+  size_t start = 0;
+  while (start < targets.size()) {
+    size_t end = targets.find(',', start);
+    if (end == std::string::npos) end = targets.size();
+    size_t first = targets.find_first_not_of(" \\t\\r\\n", start);
+    if (first != std::string::npos && first < end) {
+      size_t last = targets.find_last_not_of(" \\t\\r\\n", end - 1);
+      if (last != std::string::npos && last >= first) {
+        std::string name = targets.substr(first, last - first + 1);
+        if (std::find(parsed.begin(), parsed.end(), name) == parsed.end()) parsed.push_back(name);
+      }
+    }
+    start = end + 1;
+  }
+  this->capture_training_targets_ = std::move(parsed);
+}
+
+bool MicroWakeWord::is_capture_training_target_(const std::string *wake_word) const {
+  if (wake_word == nullptr || this->capture_training_targets_.empty()) return false;
+  // Do not capture auxiliary/internal or temporarily disabled wake words.
+  for (auto *model : this->wake_word_models_) {
+    if (model->get_wake_word() == *wake_word && model->is_enabled() && !model->get_internal_only()) {
+      return std::find(this->capture_training_targets_.begin(), this->capture_training_targets_.end(),
+                       *wake_word) != this->capture_training_targets_.end();
+    }
+  }
+  return false;
+}
+
 void MicroWakeWord::queue_detection_capture_(const DetectionEvent &detection_event, DetectionEventType event_type) {
+  if (!this->is_capture_training_target_(detection_event.wake_word)) return;
   const char *event_type_header = detection_event_type_to_header(event_type);
   if (event_type_header[0] == '\0') {
     return;
