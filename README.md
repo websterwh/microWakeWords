@@ -1,3 +1,5 @@
+> **Home Assistant 2026.11 Marketplace integration:** In **Settings → Marketplace → Add from link**, enter `https://github.com/websterwh/microWakeWords`, then install **microWakeWord Trainer**. After installation, configure it under **Settings → Devices & services → Add integration**. ESPHome firmware package: `github://websterwh/microWakeWords/esphome/voice_pe_trainer.yaml@main`. See the [integration setup guide](custom_components/mww_trainer/README.md). This integration is experimental and should be tested before enabling automatic deployments.
+
 <div align="center">
   <a href="https://taterassistant.com">
     <img src="images/tater-repo-logo.png" alt="microWakeWords" width="460"/>
