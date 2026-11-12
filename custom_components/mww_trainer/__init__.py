@@ -109,9 +109,9 @@ class TrainerCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         try:
             mode = self.adapter
-            catalog, auto = await asyncio.gather(
+            catalog, library = await asyncio.gather(
                 self._get_json("/api/trained_wake_words/catalog"),
-                self._get_json("/api/auto_train"),
+                self._get_json("/api/wake_word_library"),
             )
             if not isinstance(catalog, dict) or not catalog.get("ok"):
                 raise UpdateFailed("Invalid trainer catalog")
@@ -165,10 +165,18 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 manifest_json = None
             digest = hashlib.sha256(model_bytes).hexdigest()
             manifest_url = self._url(manifest_path)
-            config = auto.get("config", {}) if isinstance(auto, dict) else {}
-            phrase = str(config.get("wake_phrase") or "").strip()
+            # The trainer library's active selection is the training target.
+            # Auto-training's wake_phrase can be unset when training manually,
+            # and must not override the library's active word.
+            if not isinstance(library, dict) or not library.get("ok") or not isinstance(library.get("words"), list):
+                raise UpdateFailed("Invalid trainer wake-word library response")
+            active = [
+                str(word.get("phrase") or "").strip()
+                for word in library["words"]
+                if isinstance(word, dict) and word.get("active")
+            ]
             extras = [x.strip() for x in self.settings.get(CONF_EXTRA_TARGETS, "").split(",") if x.strip()]
-            targets = list(dict.fromkeys(([phrase] if phrase else []) + extras))
+            targets = list(dict.fromkeys(x for x in (active + extras) if x))
             device_ready = True
             if mode == "esphome":
                 # An ESPHome text entity is often "unavailable" during HA
