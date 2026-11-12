@@ -36,13 +36,20 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
     def installed_version(self):
         digest = self.coordinator.installed_hash
         if not digest:
-            return "not published" if self.coordinator.adapter == "ha_catalog" else "not deployed"
+            # Unknown is not proof an update is required.
+            return None
         return digest[:12]
 
     @property
     def latest_version(self):
         data = self.coordinator.data
-        return data["hash"][:12] if data else None
+        if not data:
+            return None
+        # Without an installed-model fingerprint, do not emit an unverified
+        # "Update available" notice immediately after integration setup.
+        if self.coordinator.adapter == "esphome" and self.coordinator.installed_hash is None:
+            return None
+        return data["hash"][:12]
 
     @property
     def extra_state_attributes(self):
@@ -56,7 +63,8 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
             }
         return {
             "delivery": "ESPHome runtime update",
-            "device_update_confirmed": bool(self.coordinator.deployed_hash),
+            "device_update_confirmed": self.coordinator.installed_hash is not None,
+            "installed_hash_verified": self.coordinator.installed_hash is not None,
             "trainer_manifest_error": data.get("manifest_error"),
         }
 
