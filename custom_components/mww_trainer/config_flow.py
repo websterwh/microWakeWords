@@ -7,7 +7,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     DOMAIN, CONF_URL, CONF_MODEL, CONF_BUTTON, CONF_STATUS,
-    CONF_COUNT, CONF_TARGETS, CONF_EXTRA_TARGETS, CONF_AUTO,
+    CONF_COUNT, CONF_TARGETS, CONF_MANIFEST, CONF_EXTRA_TARGETS, CONF_AUTO,
 )
 
 
@@ -33,6 +33,7 @@ class TrainerFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_BUTTON, default=data.get(CONF_BUTTON, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="button")),
             vol.Required(CONF_STATUS, default=data.get(CONF_STATUS, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(CONF_COUNT, default=data.get(CONF_COUNT, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            vol.Required(CONF_MANIFEST, default=data.get(CONF_MANIFEST, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="text")),
             vol.Required(CONF_TARGETS, default=data.get(CONF_TARGETS, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="text")),
             vol.Optional(CONF_EXTRA_TARGETS, default=data.get(CONF_EXTRA_TARGETS, "")): str,
             vol.Required(CONF_AUTO, default=data.get(CONF_AUTO, False)): bool,
