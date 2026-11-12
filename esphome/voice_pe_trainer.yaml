@@ -7,7 +7,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/websterwh/microWakeWords
-      ref: feature/runtime-model-update-status
+      ref: main
       path: shared/components
     components:
       - micro_wake_word
