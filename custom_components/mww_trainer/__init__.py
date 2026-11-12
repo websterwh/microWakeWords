@@ -368,15 +368,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         event.data.get("entity_id"), new_s, current.device_id,
                     )
                     hass.async_create_task(current.async_request_refresh())
-                # Fingerprint changes (including a manual model deployment)
-                # should update Home Assistant's update entity immediately.
+                # Fingerprint changes (including a manual model deployment
+                # or a device reboot/reflash) should trigger a full coordinator
+                # refresh to re-verify the installed model against the trainer.
                 if (
                     event.data.get("entity_id")
                     == configured_entities(hass, current.settings).get("runtime_hash_entity")
                     and new_s is not None
                     and old_s != new_s
                 ):
-                    current.async_update_listeners()
+                    _LOGGER.debug(
+                        "Runtime model hash changed for %s (%r -> %r); "
+                        "requesting coordinator refresh to verify against trainer",
+                        current.device_id, old_s, new_s,
+                    )
+                    hass.async_create_task(current.async_request_refresh())
             entry.async_on_unload(async_track_state_change_event(
                 hass, ids, on_entity_state_change
             ))
