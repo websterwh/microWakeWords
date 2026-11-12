@@ -158,16 +158,24 @@ class TrainerCoordinator(DataUpdateCoordinator):
             phrase = str(config.get("wake_phrase") or "").strip()
             extras = [x.strip() for x in self.settings.get(CONF_EXTRA_TARGETS, "").split(",") if x.strip()]
             targets = list(dict.fromkeys(([phrase] if phrase else []) + extras))
+            device_ready = True
             if mode == "esphome":
-                # Fail closed: only user-approved training targets are uploaded.
-                await self._set_text(CONF_TARGETS, ",".join(targets))
-                if manifest_error is None:
-                    await self._set_text(CONF_MANIFEST, manifest_url)
+                # An ESPHome text entity is often "unavailable" during HA
+                # startup or satellite reconnection. Do not make trainer
+                # discovery dependent on device availability. The firmware
+                # upload allowlist defaults to empty until synchronized.
+                try:
+                    await self._set_text(CONF_TARGETS, ",".join(targets))
+                    if manifest_error is None:
+                        await self._set_text(CONF_MANIFEST, manifest_url)
+                except HomeAssistantError as err:
+                    device_ready = False
+                    _LOGGER.info("Wake-word satellite %s not ready for synchronization: %s", self.device_id, err)
             return {
                 "hash": digest, "manifest": manifest_url,
                 "manifest_json": manifest_json, "model_bytes": model_bytes,
                 "model": model, "key": key, "targets": targets, "adapter": mode,
-                "manifest_error": manifest_error,
+                "manifest_error": manifest_error, "device_ready": device_ready,
             }
         except (ClientError, asyncio.TimeoutError, ValueError, KeyError, UpdateFailed,
                 UnsupportedDevice) as err:
@@ -203,6 +211,8 @@ class TrainerCoordinator(DataUpdateCoordinator):
     async def async_install(self):
         if not self.last_update_success or not self.data:
             raise HomeAssistantError("Trainer model is unavailable")
+        if self.adapter == "esphome" and not self.data.get("device_ready", False):
+            raise HomeAssistantError("Satellite is unavailable; wait for ESPHome reconnect and retry")
         async with self._install_lock:
             target_hash = self.data["hash"]
             if self.adapter == "ha_catalog":
@@ -265,6 +275,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for coordinator in coordinators:
         async def check_auto(current=coordinator):
             if (current.automatic and current.last_update_success and
+                    (current.adapter != "esphome" or current.data.get("device_ready", False)) and
                     current.installed_hash != current.data["hash"] and
                     not current._install_lock.locked()):
                 try:
