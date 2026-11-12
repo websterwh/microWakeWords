@@ -19,6 +19,7 @@ api:
         id(mww).set_capture_upload_enabled(id(capture_wake_audio).state);
         id(mww).set_capture_close_misses_enabled(id(capture_close_misses).state);
         id(mww).set_capture_upload_url(id(trainer_app_url).state);
+        id(mww).set_capture_training_targets(id(capture_training_targets).state);
 
 text_sensor:
   - platform: template
