@@ -51,4 +51,18 @@ The updated ESPHome package publishes a **Runtime Model SHA256** diagnostic sens
 
 ESPHome template text entities may start in Home Assistant as `unknown`. The integration now sends the initial values via `text.set_value` even while a text field is `unknown`, instead of treating that state as a disconnected device. An actual `unavailable` device still waits for reconnection. The manifest URL is synchronized whether or not an HTTP request to that URL succeeds.
 
+## Version 0.4.5: revision tracking instead of version numbers
+
+A SHA-256 digest is a model's identity, not an ordered version. The update entity now reports **full 64-character digests** as installed/latest version and decides availability from a per-trainer/model revision ledger in Home Assistant's storage, never by comparing digests with each other (their hex ordering has nothing to do with age).
+
+The ledger records the first revision ever seen as a **baseline**. Only a revision published after that baseline is advertised, and only when the satellite reports a *different* verified digest. Consequences:
+
+- Initial setup never produces a false notification, and never deploys automatically, even if the satellite currently runs a compiled fallback or another wake word.
+- A satellite whose runtime digest is unknown (offline, older firmware, compiled-only fallback) reports **unknown**, not "up to date" and not "update available".
+- Re-observing the same digest (restart, re-publish of identical bytes, trainer rollback to the baseline) is not a new release.
+- Automatic updates require a verified installed digest and a post-baseline revision, and stop after three attempts per revision so a failing install cannot loop.
+- After a deployment the device's own runtime SHA-256 must equal the deployed model exactly, otherwise the installation is reported as unverified and not recorded. Firmware without the runtime-hash sensor still installs on explicit request, but keeps reporting an unknown installed version and stays out of automatic updates.
+
+The 12-character abbreviations are now display-only (`installed_version_short`, `latest_version_short`, `release_summary`). This release also fixes a model download that could hash a truncated prefix of the `.tflite`, which produced phantom revisions: the body is read to EOF and checked against `Content-Length`.
+
 Training capture targets come from the trainer's **active wake-word library selection** (`/api/wake_word_library` with `active: true`) plus explicitly configured additional phrases, rather than requiring auto-training to be enabled. An empty target list continues to disable capture. These changes require updating the **Home Assistant integration only**, not another ESPHome flash. The Voice PE's native entity list remains visible on its device page; the integration operates those entities automatically rather than changing their presentation.

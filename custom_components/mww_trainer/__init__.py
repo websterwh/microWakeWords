@@ -12,8 +12,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
-from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .catalog import publish
@@ -23,9 +23,37 @@ from .const import (
     CONF_AUTO, CONF_DEVICE, SCAN_INTERVAL_SECONDS,
 )
 from .device import device_adapter, configured_entities, UnsupportedDevice
+from .revision import (
+    MAX_AUTO_ATTEMPTS, RevisionStatus, RevisionTracker,
+    may_auto_install, normalise_hash, verified_deployment,
+)
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["update", "switch"]
+
+
+def revision_group(hass: HomeAssistant, settings):
+    """Return the revision ledger shared by every satellite of a trainer/model.
+
+    Two config entries (or two satellites of one entry) must agree on what a
+    "new" revision is, so the ledger is keyed by trainer origin and model, not
+    by config entry. Device installation status stays per satellite.
+    """
+    registry = hass.data.setdefault(f"{DOMAIN}_revisions", {})
+    identity = "{}|{}".format(
+        str(settings.get(CONF_URL) or "").strip().rstrip("/").casefold(),
+        str(settings.get(CONF_MODEL) or "").strip().casefold(),
+    )
+    key = hashlib.sha256(identity.encode()).hexdigest()[:16]
+    group = registry.get(key)
+    if group is None:
+        group = {
+            "store": Store(hass, 1, f"{DOMAIN}_revision_{key}"),
+            "tracker": None,
+            "lock": asyncio.Lock(),
+        }
+        registry[key] = group
+    return group
 
 
 class TrainerCoordinator(DataUpdateCoordinator):
@@ -40,7 +68,9 @@ class TrainerCoordinator(DataUpdateCoordinator):
         self.deployed_hash = None
         self.published_hash = None
         self.automatic = False
+        self.auto_attempts = {}
         self._install_lock = asyncio.Lock()
+        self._revision_group = revision_group(hass, self.settings)
 
     @property
     def settings(self):
@@ -65,23 +95,64 @@ class TrainerCoordinator(DataUpdateCoordinator):
         entities = configured_entities(self.hass, self.settings)
         entity_id = entities.get("runtime_hash_entity")
         state = self.hass.states.get(entity_id) if entity_id else None
-        value = state.state.strip().lower() if state else ""
-        if len(value) == 64 and all(ch in "0123456789abcdef" for ch in value):
-            return value
-        return None
+        # Full 64-character digest only. Abbreviations are display-only, and
+        # "unknown" means the compiled fallback is running, not a model.
+        return normalise_hash(state.state if state else None)
+
+    @property
+    def revision_status(self) -> RevisionStatus:
+        """Trainer revision availability as seen by this satellite."""
+        group = self._revision_group
+        tracker = group.get("tracker") if group else None
+        if tracker is None:
+            return RevisionStatus()
+        return tracker.status(installed_hash=self.installed_hash)
 
     async def async_initialize(self):
         saved = await self.store.async_load() or {}
         self.deployed_hash = saved.get("deployed_hash")
         self.published_hash = saved.get("published_hash")
         self.automatic = saved.get("automatic", self.settings.get(CONF_AUTO, False))
+        attempts = saved.get("auto_attempts")
+        self.auto_attempts = dict(attempts) if isinstance(attempts, dict) else {}
 
     async def save(self):
         await self.store.async_save({
             "deployed_hash": self.deployed_hash,
             "published_hash": self.published_hash,
             "automatic": self.automatic,
+            "auto_attempts": self.auto_attempts,
         })
+
+    async def _async_observe_revision(self, digest, model):
+        """Record the published trainer revision in the shared ledger."""
+        group = self._revision_group
+        async with group["lock"]:
+            if group["tracker"] is None:
+                group["tracker"] = RevisionTracker.from_dict(
+                    await group["store"].async_load()
+                )
+            tracker = group["tracker"]
+            before = tracker.to_dict()
+            # The published artifact's own timestamp is authoritative. The
+            # trainer's latest_run is omitted: it can describe a failed run that
+            # published nothing (observed live), so it cannot gate a release.
+            status = tracker.observe(
+                digest,
+                revision=model.get("calibration_generated_at") or model.get("published_at"),
+            )
+            if tracker.to_dict() != before:
+                await group["store"].async_save(tracker.to_dict())
+                _LOGGER.info(
+                    "Trainer revision %s observed for device %s (baseline %s, "
+                    "new release: %s, revisions seen: %s)",
+                    digest[:12], self.device_id, (status.baseline_hash or "")[:12],
+                    status.new_release, status.revision_count,
+                )
+            seen = set(tracker.seen_revisions)
+            for attempt_hash in [h for h in self.auto_attempts if h not in seen]:
+                self.auto_attempts.pop(attempt_hash, None)
+            return status
 
     def _url(self, path):
         return self.settings[CONF_URL].rstrip("/") + path
@@ -101,10 +172,28 @@ class TrainerCoordinator(DataUpdateCoordinator):
             # Do not load an arbitrarily large file into HA's memory.
             if response.content_length is not None and response.content_length > 1048576:
                 raise UpdateFailed("Trained wake-word model exceeds 1 MiB")
-            model = await response.content.read(1048577)
-            if not model or len(model) > 1048576:
+            # StreamReader.read(n) returns as soon as *some* bytes have arrived,
+            # so a single read can yield a truncated prefix of the model. Hashing
+            # that prefix invents revisions that do not exist. Read to EOF.
+            payload = bytearray()
+            while True:
+                block = await response.content.read(65536)
+                if not block:
+                    break
+                payload.extend(block)
+                if len(payload) > 1048576:
+                    raise UpdateFailed("Trained wake-word model is empty or exceeds 1 MiB")
+            if not payload:
                 raise UpdateFailed("Trained wake-word model is empty or exceeds 1 MiB")
-            return model
+            # A short body means the transfer was cut; never hash a partial model.
+            if (response.content_length is not None
+                    and "content-encoding" not in response.headers
+                    and len(payload) != response.content_length):
+                raise UpdateFailed(
+                    "Trained wake-word model download was incomplete "
+                    f"({len(payload)} of {response.content_length} bytes)"
+                )
+            return bytes(payload)
 
     async def _async_update_data(self):
         try:
@@ -164,6 +253,7 @@ class TrainerCoordinator(DataUpdateCoordinator):
             if not isinstance(manifest_json, dict) or manifest_json.get("type") != "micro":
                 manifest_json = None
             digest = hashlib.sha256(model_bytes).hexdigest()
+            await self._async_observe_revision(digest, model)
             manifest_url = self._url(manifest_path)
             # The trainer library's active selection is the training target.
             # Auto-training's wake_phrase can be unset when training manually,
@@ -244,6 +334,34 @@ class TrainerCoordinator(DataUpdateCoordinator):
         except (TypeError, ValueError):
             return None
 
+    async def _async_confirm_deployment(self, target_hash):
+        """Require the satellite's own runtime digest to match the deployed model.
+
+        A successful update status only proves the firmware accepted a file. The
+        runtime SHA-256 sensor proves *which* model is actually loaded, so an
+        installation is recorded as deployed only on an exact 64-character
+        match. Compiled-only firmware reports "unknown" and is never matched.
+        """
+        if not configured_entities(self.hass, self.settings).get("runtime_hash_entity"):
+            # Older firmware has no fingerprint to check. Recording the attempt
+            # is harmless: the entity still reports an unknown installed version
+            # and automatic deployment stays disabled without a verified hash.
+            _LOGGER.warning(
+                "Device %s has no Runtime Model SHA256 sensor; the deployment "
+                "cannot be verified against the loaded model", self.device_id,
+            )
+            return target_hash
+        for _ in range(60):
+            if verified_deployment(target_hash, self.installed_hash) is not None:
+                return target_hash
+            await asyncio.sleep(1)
+        raise HomeAssistantError(
+            "Device reported success but its loaded model hash {} does not match "
+            "the deployed model {}; the installation was not recorded".format(
+                (self.installed_hash or "unknown")[:12], target_hash[:12]
+            )
+        )
+
     async def async_install(self):
         if not self.last_update_success or not self.data:
             raise HomeAssistantError("Trainer model is unavailable")
@@ -289,7 +407,8 @@ class TrainerCoordinator(DataUpdateCoordinator):
                     raise HomeAssistantError("Device reported model update failure")
                 if (count is not None and count > initial_count and status is not None
                         and status.state.casefold() == "success"):
-                    self.deployed_hash = target_hash
+                    # Never record an installation the device does not confirm.
+                    self.deployed_hash = await self._async_confirm_deployment(target_hash)
                     await self.save()
                     self.async_update_listeners()
                     return
@@ -313,7 +432,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # happens after platform setup, i.e., after the initial refresh). We use
     # async_track_time_interval for a reliable 5-minute polling cadence.
     for coordinator in coordinators:
-        async def periodic_refresh(current=coordinator):
+        async def periodic_refresh(_now, current=coordinator):
             try:
                 await current.async_refresh()
             except Exception:
@@ -324,18 +443,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     for coordinator in coordinators:
         async def check_auto(current=coordinator):
-            if (current.automatic and current.last_update_success and
-                    (current.adapter != "esphome" or (
-                        current.data.get("device_ready", False)
-                        and current.installed_hash is not None
-                    )) and
-                    current.installed_hash != current.data["hash"] and
-                    not current._install_lock.locked()):
-                try:
-                    await current.async_install()
-                except (HomeAssistantError, ValueError) as err:
-                    _LOGGER.warning("Automatic model update failed for %s: %s",
-                                    current.device_id, err)
+            if not current.last_update_success or not current.data:
+                return
+            status = current.revision_status
+            device_ready = (
+                current.adapter != "esphome"
+                or bool(current.data.get("device_ready", False))
+            )
+            attempts = current.auto_attempts.get(status.trainer_hash or "", 0)
+            # Requires a revision published after the baseline: the initial
+            # adoption baseline is never installed automatically, and an
+            # unknown or compiled-only satellite model never qualifies.
+            if (current._install_lock.locked() or
+                    not may_auto_install(status, automatic=current.automatic,
+                                         device_ready=device_ready, attempts=attempts)):
+                return
+            key = status.trainer_hash
+            current.auto_attempts[key] = attempts + 1
+            await current.save()
+            _LOGGER.info(
+                "Automatic model update for %s: %s -> %s (attempt %s of %s)",
+                current.device_id, (status.installed_hash or "unknown")[:12],
+                key[:12], attempts + 1, MAX_AUTO_ATTEMPTS,
+            )
+            try:
+                await current.async_install()
+            except (HomeAssistantError, ValueError) as err:
+                _LOGGER.warning("Automatic model update failed for %s: %s",
+                                current.device_id, err)
 
         entry.async_on_unload(coordinator.async_add_listener(
             lambda fn=check_auto: hass.async_create_task(fn())
