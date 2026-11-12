@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -60,7 +60,11 @@ class TrainerCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, device_id=None):
         super().__init__(
             hass, _LOGGER, name="microWakeWord Trainer",
-            update_interval=None,
+            # Let the coordinator own the polling cadence. It schedules the next
+            # refresh after every completed refresh while listeners exist (the
+            # entities attach listeners during platform setup), so an external
+            # timer is unnecessary and can silently stop firing.
+            update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.entry = entry
         self.device_id = device_id
@@ -426,20 +430,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinators.append(coordinator)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinators
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Explicit periodic refresh: HA's built-in scheduler is unreliable because
-    # it only starts after the first CoordinatorEntity listener is added (which
-    # happens after platform setup, i.e., after the initial refresh). We use
-    # async_track_time_interval for a reliable 5-minute polling cadence.
-    for coordinator in coordinators:
-        async def periodic_refresh(_now, current=coordinator):
-            try:
-                await current.async_refresh()
-            except Exception:
-                _LOGGER.exception("Periodic refresh failed for %s", current.device_id)
-        entry.async_on_unload(async_track_time_interval(
-            hass, periodic_refresh, timedelta(seconds=SCAN_INTERVAL_SECONDS)
-        ))
 
     for coordinator in coordinators:
         async def check_auto(current=coordinator):
