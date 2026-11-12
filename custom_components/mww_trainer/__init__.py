@@ -194,6 +194,12 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 except HomeAssistantError as err:
                     device_ready = False
                     _LOGGER.info("Wake-word satellite %s not ready for synchronization: %s", self.device_id, err)
+            # If device wasn't ready, schedule a faster retry (30s) so the user
+            # sees correct state quickly after reboot/reflash.
+            if not device_ready:
+                self.update_interval = timedelta(seconds=30)
+            elif self.update_interval != timedelta(seconds=SCAN_INTERVAL_SECONDS):
+                self.update_interval = timedelta(seconds=SCAN_INTERVAL_SECONDS)
             return {
                 "hash": digest, "manifest": manifest_url,
                 "manifest_json": manifest_json, "model_bytes": model_bytes,
@@ -371,15 +377,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Fingerprint changes (including a manual model deployment
                 # or a device reboot/reflash) should trigger a full coordinator
                 # refresh to re-verify the installed model against the trainer.
+                # Also trigger on first appearance of the hash sensor (old_s None
+                # means this is the first state we've seen for it after HA start
+                # or device reconnect).
                 if (
                     event.data.get("entity_id")
                     == configured_entities(hass, current.settings).get("runtime_hash_entity")
                     and new_s is not None
-                    and old_s != new_s
+                    and (old_s is None or old_s != new_s)
                 ):
                     _LOGGER.debug(
-                        "Runtime model hash changed for %s (%r -> %r); "
+                        "Runtime model hash %s for %s (%r -> %r); "
                         "requesting coordinator refresh to verify against trainer",
+                        'appeared' if old_s is None else 'changed',
                         current.device_id, old_s, new_s,
                     )
                     hass.async_create_task(current.async_request_refresh())
