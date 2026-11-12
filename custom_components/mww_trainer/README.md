@@ -1,24 +1,34 @@
-# microWakeWord Trainer (Home Assistant custom integration)
+# microWakeWord Trainer (Home Assistant integration)
 
-Experimental integration for a local [TaterTotterson microWakeWord Trainer](https://github.com/TaterTotterson/microWakeWord-Trainer-Nvidia-Docker).
+Experimental integration for the [TaterTotterson microWakeWord Trainer](https://github.com/TaterTotterson/microWakeWord-Trainer-Nvidia-Docker). Install through Home Assistant Marketplace / HACS using the repository URL `https://github.com/websterwh/microWakeWords`, or place the `custom_components/mww_trainer` folder in Home Assistant's config directory and restart Home Assistant.
 
-Provides a native **Wake word model** update entity and **Automatic model updates** switch on a dedicated **microWakeWord Trainer** device. It checks the selected model's SHA-256 every five minutes and confirms installation with the ESPHome success counter and status entity before recording the deployed version.
+## Setup
 
-## Installation
+In **Settings → Devices & services → Add integration → microWakeWord Trainer**, choose:
 
-Copy `custom_components/mww_trainer` to `/config/custom_components/mww_trainer` in Home Assistant and restart HA. Flash the matching ESPHome package on the Voice PE, then add **microWakeWord Trainer** under **Settings → Devices & services → Add integration**.
+1. **Trainer URL** (the address Home Assistant can reach).
+2. **Wake word / model name** (trainer catalog key or display name, such as Alexa).
+3. **Wake-word device** (the device running ESPHome's trainer package, EchoLocal, or techo5).
+4. Optional additional training target phrases and automatic update mode.
 
-Configure the trainer URL, trained model **key** (not display label), and corresponding entities from the Voice PE:
-- **Update model button**
-- **Update status sensor**
-- **Successful update count sensor**
-- **Trainer Active Wake Words text entity**
-- **Trainer Model Manifest URL text entity**
+You do **not** need to select individual entity IDs. For direct ESPHome devices the integration discovers the update button, update status, update counter, model manifest text field, and active-target text field from the chosen device. Compatible devices are detected by available features, not by Voice PE model name.
 
-The integration reads `/api/trained_wake_words/catalog` and `/api/auto_train`. The auto-training `wake_phrase` is the primary training target. Additional training targets can be configured as comma-separated phrases for a second simultaneous wake word. Only explicitly selected phrases are uploaded. This is separate from the firmware's ordinary wake-word activation: auxiliary words such as Stop keep working and are excluded from uploads.
+## Supported backends
 
-**Important:** The trainer currently exposes a single auto-training wake phrase, not the Voice PE's exact HA-selected two-word configuration. Therefore, explicitly configure any second training phrase; the integration cannot safely infer it from the trainer. Names must match the model's reported wake-word label.
+| Backend | Publish/update | Confirmation | Captured audio |
+| --- | --- | --- | --- |
+| ESPHome with this repository's `voice_pe_trainer.yaml` package | Install model into device's A/B runtime slots, no firmware reflash | Device's success status **and** increased update counter | Wake detections and close misses for explicitly configured training targets only |
+| [EchoLocal](https://github.com/ygelfand/echolocal) | Publish model into Home Assistant's `custom_wake_words` directory | **Publication only**; not device installation | Not yet integrated with the TaterTotterson trainer |
+| [techo5](https://github.com/HuskerMinion/techo5) | Publish model into Home Assistant's `custom_wake_words` directory | **Publication only**; not device installation | Not yet integrated with the TaterTotterson trainer |
 
-**Manual mode (default):** Install from the native update entity. **Automatic mode:** Enable the switch to deploy the next detected model revision without approval. A successful deployment is only persisted after the update count increases and status reads `success`. On first installation, the integration does not assume that an existing model is already deployed.
+**For EchoLocal and techo5:** After publication, **restart Home Assistant** to load the custom wake-word catalog, and select the wake word in the Assist satellite's settings. Both systems support fetching Home Assistant-offered custom wake-word models. Publishing a model is **not** a claim that the satellite has installed or activated it. No firmware reflash is necessary on these devices for this catalog route. techo5 also has a direct upload option in its own authenticated setup page, but the integration deliberately does not bypass that security flow.
 
-Keep your previous automation disabled rather than deleting it until the new workflow is verified. This has not yet been tested against your live HA instance, trainer or device.
+**Note:** techo5 documents a difference in wake-score behavior for models uploaded through its setup page versus Home Assistant. If a catalog-installed model is insensitive, follow techo5's own upload instructions.
+
+## Updates and capture safety
+
+The integration compares trained model SHA-256 checksums every five minutes. In manual mode, install from the **Wake word model** update entity. In automatic mode the switch automatically installs to a direct ESPHome device, or **publishes** a new model to the HA custom-wake-word catalog for EchoLocal/techo5. Publishing does not restart HA or silently change the satellite's selected model.
+
+For ESPHome capture, the trainer's `/api/auto_train` primary wake phrase plus explicitly listed optional additional phrases forms the allowlist. This prevents unrelated compiled wake words, including auxiliary words such as Stop, from being uploaded simply because they are loaded. Normal detection, timers, and voice pipelines are unchanged. This is not automatic discovery of both Home Assistant-selected assistant wake-word slots: any second training-target phrase must currently be entered explicitly.
+
+Keep the old hash automation disabled while testing, and turn on automatic updates only after a successful manual test.
