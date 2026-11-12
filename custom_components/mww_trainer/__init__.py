@@ -28,13 +28,14 @@ PLATFORMS = ["update", "switch"]
 
 
 class TrainerCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, device_id=None):
         super().__init__(
             hass, _LOGGER, name="microWakeWord Trainer",
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.entry = entry
-        self.store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}")
+        self.device_id = device_id
+        self.store = Store(hass, 1, f"{DOMAIN}_{entry.entry_id}_{device_id or 'legacy'}")
         self.deployed_hash = None
         self.published_hash = None
         self.automatic = False
@@ -42,7 +43,10 @@ class TrainerCoordinator(DataUpdateCoordinator):
 
     @property
     def settings(self):
-        return {**self.entry.data, **self.entry.options}
+        settings = {**self.entry.data, **self.entry.options}
+        if self.device_id:
+            settings[CONF_DEVICE] = self.device_id
+        return settings
 
     @property
     def adapter(self):
@@ -123,12 +127,31 @@ class TrainerCoordinator(DataUpdateCoordinator):
             if "/" in model_file or "\\" in model_file or not model_file.endswith(".tflite"):
                 raise UpdateFailed("Unsafe model filename returned by trainer")
             model_path = "/api/trained_wake_words/" + quote(model_file)
-            manifest_json, model_bytes = await asyncio.gather(
-                self._get_json(manifest_path),
-                self._get_model(model_path),
-            )
+            model_bytes = await self._get_model(model_path)
+            manifest_json = None
+            manifest_error = None
+            try:
+                manifest_json = await self._get_json(manifest_path)
+            except (ClientError, asyncio.TimeoutError, ValueError) as err:
+                manifest_error = str(err)
+                _LOGGER.warning("Trainer ESPHome manifest unavailable for %s: %s", key, err)
+                # The published wake bundle is an independent source for HA catalog metadata.
+                try:
+                    bundle = await self._get_json(
+                        "/api/trained_wake_words/" + quote(key + ".wake-bundle.json")
+                    )
+                    meta = bundle.get("micro_wake_word", {}) if isinstance(bundle, dict) else {}
+                    if isinstance(meta, dict):
+                        manifest_json = {
+                            field: meta[field] for field in (
+                                "type", "wake_word", "author", "website", "model",
+                                "trained_languages", "version", "micro"
+                            ) if field in meta
+                        }
+                except (ClientError, asyncio.TimeoutError, ValueError) as fallback_err:
+                    _LOGGER.warning("Trainer wake bundle fallback unavailable: %s", fallback_err)
             if not isinstance(manifest_json, dict) or manifest_json.get("type") != "micro":
-                raise UpdateFailed("Trainer returned an invalid microWakeWord manifest")
+                manifest_json = None
             digest = hashlib.sha256(model_bytes).hexdigest()
             manifest_url = self._url(manifest_path)
             config = auto.get("config", {}) if isinstance(auto, dict) else {}
@@ -138,11 +161,13 @@ class TrainerCoordinator(DataUpdateCoordinator):
             if mode == "esphome":
                 # Fail closed: only user-approved training targets are uploaded.
                 await self._set_text(CONF_TARGETS, ",".join(targets))
-                await self._set_text(CONF_MANIFEST, manifest_url)
+                if manifest_error is None:
+                    await self._set_text(CONF_MANIFEST, manifest_url)
             return {
                 "hash": digest, "manifest": manifest_url,
                 "manifest_json": manifest_json, "model_bytes": model_bytes,
                 "model": model, "key": key, "targets": targets, "adapter": mode,
+                "manifest_error": manifest_error,
             }
         except (ClientError, asyncio.TimeoutError, ValueError, KeyError, UpdateFailed,
                 UnsupportedDevice) as err:
@@ -181,6 +206,8 @@ class TrainerCoordinator(DataUpdateCoordinator):
         async with self._install_lock:
             target_hash = self.data["hash"]
             if self.adapter == "ha_catalog":
+                if self.data["manifest_json"] is None:
+                    raise HomeAssistantError("Trainer manifest and wake bundle are unavailable; check trainer logs")
                 # This publishes to HA, NOT to the device. HA must restart and
                 # the model must be selected on the satellite before it loads.
                 await publish(
@@ -192,6 +219,11 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 self.async_update_listeners()
                 return
 
+            if self.data.get("manifest_error"):
+                raise HomeAssistantError(
+                    "Trainer returned an error for the ESPHome manifest. Check trainer logs: "
+                    + self.data["manifest_error"]
+                )
             initial_count = self._count()
             if initial_count is None:
                 raise HomeAssistantError("Model update counter is unavailable")
@@ -219,24 +251,31 @@ class TrainerCoordinator(DataUpdateCoordinator):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    coordinator = TrainerCoordinator(hass, entry)
-    await coordinator.async_initialize()
-    await coordinator.async_config_entry_first_refresh()
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    selected = {**entry.data, **entry.options}.get(CONF_DEVICE)
+    device_ids = selected if isinstance(selected, list) else ([selected] if selected else [None])
+    coordinators = []
+    for device_id in dict.fromkeys(device_ids):
+        coordinator = TrainerCoordinator(hass, entry, device_id)
+        await coordinator.async_initialize()
+        await coordinator.async_config_entry_first_refresh()
+        coordinators.append(coordinator)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinators
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    async def check_auto():
-        if (coordinator.automatic and coordinator.last_update_success and
-                coordinator.installed_hash != coordinator.data["hash"] and
-                not coordinator._install_lock.locked()):
-            try:
-                await coordinator.async_install()
-            except (HomeAssistantError, ValueError) as err:
-                _LOGGER.warning("Automatic model update failed: %s", err)
+    for coordinator in coordinators:
+        async def check_auto(current=coordinator):
+            if (current.automatic and current.last_update_success and
+                    current.installed_hash != current.data["hash"] and
+                    not current._install_lock.locked()):
+                try:
+                    await current.async_install()
+                except (HomeAssistantError, ValueError) as err:
+                    _LOGGER.warning("Automatic model update failed for %s: %s",
+                                    current.device_id, err)
 
-    entry.async_on_unload(coordinator.async_add_listener(
-        lambda: hass.async_create_task(check_auto())
-    ))
+        entry.async_on_unload(coordinator.async_add_listener(
+            lambda fn=check_auto: hass.async_create_task(fn())
+        ))
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
