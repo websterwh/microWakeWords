@@ -3,22 +3,20 @@
     "step": {
       "user": {
         "title": "Connect microWakeWord Trainer",
-        "description": "Enter the trainer URL, its model key (for example alexa), and the ESPHome entities for that Voice PE. Additional targets are comma-separated training phrases.",
+        "description": "Select a compatible satellite. ESPHome devices with this trainer package can update live. EchoLocal and techo5 use Home Assistant's custom wake-word catalog (Home Assistant restart and wake-word selection required).",
         "data": {
           "url": "Trainer URL",
-          "model": "Model key",
-          "update_button": "Update model button",
-          "status_entity": "Update status sensor",
-          "count_entity": "Successful update count sensor",
-          "target_entity": "Trainer Active Wake Words text entity",
-          "extra_targets": "Additional training target phrases",
-          "automatic_updates": "Automatically deploy updates",
-          "manifest_entity": "Model Manifest URL text entity"
+          "model": "Wake word / model name",
+          "device": "Wake-word device",
+          "extra_targets": "Additional training target phrases (optional)",
+          "automatic_updates": "Automatically publish or deploy model updates"
         }
       }
     },
     "error": {
-      "invalid_url": "Enter a valid HTTP(S) URL"
+      "invalid_url": "Enter a valid HTTP(S) URL",
+      "missing_model": "Enter a wake-word or model name",
+      "unsupported_device": "This device has no supported wake-word update method. Select an ESPHome trainer device, EchoLocal, or techo5."
     }
   },
   "options": {
@@ -27,16 +25,15 @@
         "title": "Configure trainer",
         "data": {
           "url": "Trainer URL",
-          "model": "Model key",
-          "update_button": "Update model button",
-          "status_entity": "Update status sensor",
-          "count_entity": "Update count sensor",
-          "target_entity": "Training targets text entity",
+          "model": "Wake word / model name",
+          "device": "Wake-word device",
           "extra_targets": "Additional training phrases",
-          "automatic_updates": "Automatically deploy updates",
-          "manifest_entity": "Model Manifest URL text entity"
+          "automatic_updates": "Automatic model updates"
         }
       }
+    },
+    "error": {
+      "unsupported_device": "The selected device is not supported."
     }
   }
 }
