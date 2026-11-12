@@ -23,6 +23,21 @@ api:
 
 text_sensor:
   - platform: template
+    name: "Runtime Model SHA256"
+    id: runtime_model_sha256
+    icon: mdi:fingerprint
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return id(mww).get_active_runtime_model_sha256();
+    filters:
+      - lambda: |-
+          static std::string last_value;
+          if (x == last_value) return {};
+          last_value = x;
+          return x;
+
+  - platform: template
     name: "Alexa Runtime Model"
     id: alexa_runtime_model
     icon: mdi:brain
@@ -74,9 +89,7 @@ button:
     entity_category: config
     on_press:
       - lambda: |-
-          id(mww).set_runtime_model_url(
-            "${mww_trainer_url}${mww_model_manifest_path}"
-          );
+          id(mww).set_runtime_model_url(id(trainer_manifest_url).state);
 
   - platform: template
     name: "Restore Compiled Wake Word Model"
