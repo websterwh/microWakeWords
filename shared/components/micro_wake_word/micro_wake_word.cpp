@@ -1664,9 +1664,9 @@ void MicroWakeWord::set_capture_training_targets(const std::string &targets) {
   while (start < targets.size()) {
     size_t end = targets.find(',', start);
     if (end == std::string::npos) end = targets.size();
-    size_t first = targets.find_first_not_of(" \\t\\r\\n", start);
+    size_t first = targets.find_first_not_of(" \t\r\n", start);
     if (first != std::string::npos && first < end) {
-      size_t last = targets.find_last_not_of(" \\t\\r\\n", end - 1);
+      size_t last = targets.find_last_not_of(" \t\r\n", end - 1);
       if (last != std::string::npos && last >= first) {
         std::string name = targets.substr(first, last - first + 1);
         if (std::find(parsed.begin(), parsed.end(), name) == parsed.end()) parsed.push_back(name);
