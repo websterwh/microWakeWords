@@ -146,3 +146,14 @@ text:
     set_action:
       - lambda: |-
           id(mww).set_capture_training_targets(x);
+
+  - platform: template
+    id: trainer_manifest_url
+    name: "Trainer Model Manifest URL"
+    icon: mdi:download-network
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "${mww_trainer_url}${mww_model_manifest_path}"
+    mode: TEXT
+    max_length: 255
