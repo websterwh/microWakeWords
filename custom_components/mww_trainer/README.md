@@ -17,7 +17,7 @@ You do **not** need to select individual entity IDs. For direct ESPHome devices 
 
 | Backend | Publish/update | Confirmation | Captured audio |
 | --- | --- | --- | --- |
-| ESPHome with this repository's `voice_pe_trainer.yaml` package | Install model into device's A/B runtime slots, no firmware reflash | Device's success status **and** increased update counter | Wake detections and close misses for explicitly configured training targets only |
+| ESPHome with this repository's `mww_trainer.yaml` package | Install model into device's A/B runtime slots, no firmware reflash | Device's success status **and** increased update counter | Wake detections and close misses for explicitly configured training targets only |
 | [EchoLocal](https://github.com/ygelfand/echolocal) | Publish model into Home Assistant's `custom_wake_words` directory | **Publication only**; not device installation | Not yet integrated with the TaterTotterson trainer |
 | [techo5](https://github.com/HuskerMinion/techo5) | Publish model into Home Assistant's `custom_wake_words` directory | **Publication only**; not device installation | Not yet integrated with the TaterTotterson trainer |
 

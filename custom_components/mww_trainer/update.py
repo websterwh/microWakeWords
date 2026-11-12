@@ -70,7 +70,7 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
             **({
                 "installed_version_note": (
                     "Firmware does not yet expose a Runtime Model SHA256 sensor. "
-                    "Reflash with the latest voice_pe_trainer.yaml package to enable "
+                    "Reflash with the latest mww_trainer.yaml package to enable "
                     "installed-version tracking."
                 )
             } if no_hash_sensor else {}),
