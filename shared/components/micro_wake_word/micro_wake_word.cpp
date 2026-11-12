@@ -1377,12 +1377,22 @@ bool MicroWakeWord::write_runtime_model_from_url_(const std::string &url) {
   return true;
 }
 
+const char *MicroWakeWord::get_runtime_model_update_status() const {
+  switch (this->runtime_model_update_status_.load()) {
+    case 1: return "updating";
+    case 2: return "success";
+    case 3: return "failed";
+    default: return "idle";
+  }
+}
+
 void MicroWakeWord::set_runtime_model_url(const std::string &runtime_model_url) {
   if (this->runtime_model_update_in_progress_.exchange(true)) {
     ESP_LOGW(TAG, "Runtime microWakeWord model update is already in progress.");
     return;
   }
 
+  this->runtime_model_update_status_.store(1);
   auto *request = new RuntimeModelUpdateRequest();
   request->parent = this;
   request->url = runtime_model_url;
@@ -1390,6 +1400,8 @@ void MicroWakeWord::set_runtime_model_url(const std::string &runtime_model_url) 
   BaseType_t task_created =
       xTaskCreate(MicroWakeWord::runtime_model_update_task, "mww_model_update", 12288, request, 2, nullptr);
   if (task_created != pdPASS) {
+    this->runtime_model_update_status_.store(3);
+    this->runtime_model_update_count_.fetch_add(1);
     this->runtime_model_update_in_progress_.store(false);
     delete request;
     ESP_LOGW(TAG, "Failed to start runtime microWakeWord model update task.");
@@ -1405,6 +1417,8 @@ void MicroWakeWord::runtime_model_update_task(void *params) {
 
   const bool success = request->parent->write_runtime_model_from_url_(request->url);
   ESP_LOGI(TAG, "Runtime microWakeWord model update %s.", success ? "finished" : "failed");
+  request->parent->runtime_model_update_status_.store(success ? 2 : 3);
+  request->parent->runtime_model_update_count_.fetch_add(1);
   request->parent->runtime_model_update_in_progress_.store(false);
   delete request;
 
@@ -1530,6 +1544,8 @@ bool MicroWakeWord::capture_feature_enabled_() const {
 }
 
 bool MicroWakeWord::should_capture_close_miss_(const DetectionEvent &detection_event) {
+  // This runs in the inference task. Do not access the main-loop-owned
+  // target vector here; filter both event types at queue_detection_capture_.
   if (!this->capture_close_misses_enabled_.load()) {
     return false;
   }
@@ -1641,7 +1657,50 @@ bool MicroWakeWord::snapshot_capture_audio_(std::unique_ptr<uint8_t, decltype(&s
   return true;
 }
 
+void MicroWakeWord::set_capture_training_targets(const std::string &targets) {
+  // Updated from ESPHome's main loop; capture decisions are made on that same loop.
+  std::vector<std::string> parsed;
+  size_t start = 0;
+  while (start < targets.size()) {
+    size_t end = targets.find(',', start);
+    if (end == std::string::npos) end = targets.size();
+    size_t first = targets.find_first_not_of(" \t\r\n", start);
+    if (first != std::string::npos && first < end) {
+      size_t last = targets.find_last_not_of(" \t\r\n", end - 1);
+      if (last != std::string::npos && last >= first) {
+        std::string name = targets.substr(first, last - first + 1);
+        if (std::find(parsed.begin(), parsed.end(), name) == parsed.end()) parsed.push_back(name);
+      }
+    }
+    start = end + 1;
+  }
+  this->capture_training_targets_ = std::move(parsed);
+}
+
+bool MicroWakeWord::is_capture_training_target_(const std::string *wake_word) const {
+  if (wake_word == nullptr || this->capture_training_targets_.empty()) return false;
+  // Model labels and trainer phrases may differ in capitalization.
+  auto same_phrase = [](const std::string &left, const std::string &right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(left[i])) !=
+          std::tolower(static_cast<unsigned char>(right[i]))) return false;
+    }
+    return true;
+  };
+  // Match a specifically enabled, exposed wake word, never an auxiliary stop command.
+  for (auto *model : this->wake_word_models_) {
+    if (model->get_wake_word() == *wake_word && model->is_enabled() && !model->get_internal_only()) {
+      for (const auto &target : this->capture_training_targets_) {
+        if (same_phrase(target, *wake_word)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 void MicroWakeWord::queue_detection_capture_(const DetectionEvent &detection_event, DetectionEventType event_type) {
+  if (!this->is_capture_training_target_(detection_event.wake_word)) return;
   const char *event_type_header = detection_event_type_to_header(event_type);
   if (event_type_header[0] == '\0') {
     return;

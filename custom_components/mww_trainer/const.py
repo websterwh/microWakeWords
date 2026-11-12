@@ -1,0 +1,11 @@
+DOMAIN = "mww_trainer"
+CONF_URL = "url"
+CONF_MODEL = "model"
+CONF_BUTTON = "update_button"
+CONF_STATUS = "status_entity"
+CONF_COUNT = "count_entity"
+CONF_TARGETS = "target_entity"
+CONF_MANIFEST = "manifest_entity"
+CONF_EXTRA_TARGETS = "extra_targets"
+CONF_AUTO = "automatic_updates"
+SCAN_INTERVAL_SECONDS = 300

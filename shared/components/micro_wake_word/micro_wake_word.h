@@ -118,9 +118,14 @@ class MicroWakeWord : public Component
     return static_cast<DetectionProfile>(profile);
   }
   void set_wake_word_probability_cutoff(uint8_t probability_cutoff);
+  // Comma-separated training targets supplied by the trainer integration. Empty = no uploads.
+  void set_capture_training_targets(const std::string &targets);
+  bool is_capture_training_target_(const std::string *wake_word) const;
   void set_capture_upload_url(const std::string &capture_upload_url) { this->capture_upload_url_ = capture_upload_url; }
   const std::string &get_capture_upload_url() const { return this->capture_upload_url_; }
   void set_runtime_model_url(const std::string &runtime_model_url);
+  const char *get_runtime_model_update_status() const;
+  uint32_t get_runtime_model_update_count() const { return this->runtime_model_update_count_.load(); }
   const std::string &get_runtime_model_url() const { return this->runtime_model_url_; }
   const std::string &get_active_runtime_wake_word() const { return this->active_runtime_wake_word_; }
 
@@ -171,6 +176,7 @@ class MicroWakeWord : public Component
   uint32_t last_close_miss_upload_ms_{0};
   uint32_t last_wake_detection_ms_{0};
   std::string capture_upload_url_;
+  std::vector<std::string> capture_training_targets_;
   bool pending_close_miss_{false};
   DetectionEvent pending_close_miss_event_;
   uint32_t pending_close_miss_due_ms_{0};
@@ -220,6 +226,10 @@ class MicroWakeWord : public Component
   std::string runtime_model_url_;
   std::string active_runtime_wake_word_{"compiled"};
   std::atomic<bool> runtime_model_update_in_progress_{false};
+  // Written by the update worker, read by ESPHome template sensors on the main loop.
+  // 0=idle, 1=updating, 2=success, 3=failed.
+  std::atomic<uint8_t> runtime_model_update_status_{0};
+  std::atomic<uint32_t> runtime_model_update_count_{0};
   const esp_partition_t *runtime_model_partitions_[2]{nullptr, nullptr};
   const esp_partition_t *active_runtime_model_partition_{nullptr};
   uint8_t *active_runtime_model_buffer_{nullptr};
