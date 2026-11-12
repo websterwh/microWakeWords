@@ -29,7 +29,7 @@ class TrainerFlow(config_entries.ConfigFlow, domain=DOMAIN):
         data = data or {}
         return vol.Schema({
             vol.Required(CONF_URL, default=data.get(CONF_URL, "http://192.168.1.2:8789")): str,
-            vol.Required(CONF_MODEL, default=data.get(CONF_MODEL, "alexa")): str,
+            vol.Required(CONF_MODEL, default=data.get(CONF_MODEL, "")): str,
             vol.Required(CONF_BUTTON, default=data.get(CONF_BUTTON, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="button")),
             vol.Required(CONF_STATUS, default=data.get(CONF_STATUS, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
             vol.Required(CONF_COUNT, default=data.get(CONF_COUNT, "")): selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
