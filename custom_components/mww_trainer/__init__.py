@@ -11,7 +11,7 @@ import logging
 from datetime import timedelta
 from urllib.parse import quote
 
-from aiohttp import ClientError
+from aiohttp import ClientError, ClientTimeout
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -57,7 +57,7 @@ class TrainerCoordinator(DataUpdateCoordinator):
 
     async def _get_json(self, path):
         url = self.settings[CONF_URL].rstrip("/") + path
-        async with async_get_clientsession(self.hass).get(url, timeout=20) as response:
+        async with async_get_clientsession(self.hass).get(url, timeout=ClientTimeout(total=20)) as response:
             response.raise_for_status()
             return await response.json(content_type=None)
 
@@ -83,7 +83,7 @@ class TrainerCoordinator(DataUpdateCoordinator):
             # the configured trainer URL is the network trust boundary.
             manifest = self.settings[CONF_URL].rstrip("/") + "/api/trained_wake_words/" + quote(key + ".esphome.json")
             model_url = self.settings[CONF_URL].rstrip("/") + "/api/trained_wake_words/" + quote(key + ".tflite")
-            async with async_get_clientsession(self.hass).get(model_url, timeout=90) as response:
+            async with async_get_clientsession(self.hass).get(model_url, timeout=ClientTimeout(total=90)) as response:
                 response.raise_for_status()
                 digest = hashlib.sha256(await response.read()).hexdigest()
 
