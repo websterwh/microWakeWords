@@ -9,7 +9,7 @@ import asyncio
 import hashlib
 import logging
 from datetime import timedelta
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote
 
 from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
@@ -99,7 +99,13 @@ class TrainerCoordinator(DataUpdateCoordinator):
             await self._set_text(CONF_TARGETS, ",".join(targets), "_last_targets")
             await self._set_text(CONF_MANIFEST, manifest, "_last_manifest")
             return {"hash": digest, "manifest": manifest, "targets": targets, "model": model}
-        except (ClientError, asyncio.TimeoutError, ValueError, KeyError) as err:
+        except (ClientError, asyncio.TimeoutError, ValueError, KeyError, UpdateFailed) as err:
+            # Stop captures when the trainer is unreachable or no longer has
+            # an explicit training target. Wake-word recognition is unaffected.
+            try:
+                await self._set_text(CONF_TARGETS, "", "_last_targets")
+            except Exception:
+                _LOGGER.warning("Could not clear trainer capture targets after refresh failure")
             raise UpdateFailed(f"Unable to retrieve trainer model: {err}") from err
 
     async def _set_text(self, key, value, cache_attr):
