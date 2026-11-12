@@ -41,6 +41,18 @@ def direct_entities(hass, device_id):
         if len(matches) != 1:
             return None
         found[role] = matches[0]
+    # Optional capabilities are discovered without excluding older firmware.
+    for role, domain, words in (
+        ("runtime_hash_entity", "sensor", ("runtime", "model", "sha256")),
+        ("trainer_url_entity", "text", ("trainer", "app", "url")),
+    ):
+        matches = [
+            item.entity_id for item in entities
+            if not item.disabled_by and item.entity_id.startswith(domain + ".")
+            and all(word in _description(item) for word in words)
+        ]
+        if len(matches) == 1:
+            found[role] = matches[0]
     return found
 
 
