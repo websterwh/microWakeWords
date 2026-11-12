@@ -61,11 +61,19 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
                 "next_step": "Restart Home Assistant and choose the new wake word on the satellite",
                 "device_update_confirmed": False,
             }
+        no_hash_sensor = self.coordinator.installed_hash is None
         return {
             "delivery": "ESPHome runtime update",
-            "device_update_confirmed": self.coordinator.installed_hash is not None,
-            "installed_hash_verified": self.coordinator.installed_hash is not None,
+            "device_update_confirmed": not no_hash_sensor,
+            "installed_hash_verified": not no_hash_sensor,
             "trainer_manifest_error": data.get("manifest_error"),
+            **({
+                "installed_version_note": (
+                    "Firmware does not yet expose a Runtime Model SHA256 sensor. "
+                    "Reflash with the latest voice_pe_trainer.yaml package to enable "
+                    "installed-version tracking."
+                )
+            } if no_hash_sensor else {}),
         }
 
     @property

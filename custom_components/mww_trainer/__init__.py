@@ -221,9 +221,18 @@ class TrainerCoordinator(DataUpdateCoordinator):
         # not a reason to reject synchronization: send text.set_value to
         # initialize it. ESPHome optimistic text publishes the new state.
         if current.state == "unknown" or current.state != value:
+            _LOGGER.debug(
+                "Setting %s = %r (was %r) for device %s",
+                entity_id, value, current.state, self.device_id,
+            )
             await self.hass.services.async_call(
                 "text", "set_value",
                 {"entity_id": entity_id, "value": value}, blocking=True,
+            )
+        else:
+            _LOGGER.debug(
+                "Skipping %s — already %r for device %s",
+                entity_id, value, self.device_id,
             )
 
     def _count(self):
@@ -318,9 +327,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             lambda fn=check_auto: hass.async_create_task(fn())
         ))
         if coordinator.adapter == "esphome":
-            # Retry as soon as a required ESPHome entity becomes available.
-            # Home Assistant may restore its registry before an ESPHome device
-            # has published its first text state.
+            # Retry synchronization as soon as the ESPHome satellite reconnects.
+            # ESPHome optimistic text entities restore to "unknown" (not
+            # "unavailable") when the device reconnects after HA start or a
+            # device reboot. The coordinator must write the training targets and
+            # manifest URL at that point. We watch two distinct transitions:
+            #
+            # 1. unavailable -> unknown: ESPHome device just connected and HA
+            #    has not yet received any value from the device. This is the
+            #    right moment to trigger a coordinator refresh and push values.
+            #
+            # 2. unavailable/unknown -> any real value: a value already existed
+            #    in flash (restore_value: true) and ESPHome published it; we
+            #    still refresh so the coordinator can verify / overwrite if
+            #    the trainer-side targets have changed.
+            #
+            # We also watch the runtime_hash_entity so that a model deployment
+            # (which changes the hash) immediately updates the update entity.
             entities = configured_entities(hass, coordinator.settings)
             ids = [entities[role] for role in (CONF_TARGETS, CONF_MANIFEST)]
             if entities.get("runtime_hash_entity"):
@@ -328,14 +351,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             def on_entity_state_change(event, current=coordinator):
                 new_state = event.data.get("new_state")
                 old_state = event.data.get("old_state")
-                if (new_state is not None and new_state.state not in ("unavailable", "unknown")
-                        and (old_state is None or old_state.state in ("unavailable", "unknown"))):
+                old_s = old_state.state if old_state is not None else None
+                new_s = new_state.state if new_state is not None else None
+                # Trigger on reconnect: unavailable -> unknown (ESPHome just
+                # connected, entity has no value yet) or unavailable/unknown ->
+                # real value (restore_value fired). Both need a coordinator
+                # refresh to push the correct targets + manifest URL.
+                if (
+                    new_s is not None
+                    and old_s == "unavailable"
+                    and new_s != "unavailable"
+                ):
+                    _LOGGER.debug(
+                        "ESPHome entity %s came back from unavailable (now %r); "
+                        "requesting coordinator refresh for %s",
+                        event.data.get("entity_id"), new_s, current.device_id,
+                    )
                     hass.async_create_task(current.async_request_refresh())
                 # Fingerprint changes (including a manual model deployment)
                 # should update Home Assistant's update entity immediately.
-                if (event.data.get("entity_id") == configured_entities(hass, current.settings).get("runtime_hash_entity")
-                        and new_state is not None
-                        and (old_state is None or old_state.state != new_state.state)):
+                if (
+                    event.data.get("entity_id")
+                    == configured_entities(hass, current.settings).get("runtime_hash_entity")
+                    and new_s is not None
+                    and old_s != new_s
+                ):
                     current.async_update_listeners()
             entry.async_on_unload(async_track_state_change_event(
                 hass, ids, on_entity_state_change
