@@ -1,4 +1,4 @@
-"""Native Home Assistant update entity for the trained model."""
+"""Native HA update entity with explicit publisher vs deployed status."""
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -26,8 +26,10 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
 
     @property
     def installed_version(self):
-        value = self.coordinator.deployed_hash
-        return value[:12] if value else "not deployed"
+        digest = self.coordinator.installed_hash
+        if not digest:
+            return "not published" if self.coordinator.adapter == "ha_catalog" else "not deployed"
+        return digest[:12]
 
     @property
     def latest_version(self):
@@ -35,11 +37,25 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
         return data["hash"][:12] if data else None
 
     @property
+    def extra_state_attributes(self):
+        if self.coordinator.adapter == "ha_catalog":
+            return {
+                "delivery": "Home Assistant custom_wake_words",
+                "publication_only": True,
+                "next_step": "Restart Home Assistant, then select this wake word on the Assist satellite",
+                "device_update_confirmed": False,
+            }
+        return {"delivery": "ESPHome runtime update", "device_update_confirmed": bool(self.coordinator.deployed_hash)}
+
+    @property
     def release_summary(self):
         data = self.coordinator.data
         if not data:
             return None
-        return f"Trained model: {data['model'].get('label', data['model'].get('key', 'unknown'))}"
+        label = data["model"].get("label", data["model"].get("key", "unknown"))
+        if self.coordinator.adapter == "ha_catalog":
+            return f"{label}: publish to Home Assistant; restart and select on device required"
+        return f"Trained model: {label}"
 
     async def async_install(self, version=None, backup=False, **kwargs):
         await self.coordinator.async_install()
