@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
 #include <cstdlib>
 
 namespace esphome {
@@ -128,6 +129,10 @@ class MicroWakeWord : public Component
   uint32_t get_runtime_model_update_count() const { return this->runtime_model_update_count_.load(); }
   const std::string &get_runtime_model_url() const { return this->runtime_model_url_; }
   const std::string &get_active_runtime_wake_word() const { return this->active_runtime_wake_word_; }
+  std::string get_active_runtime_model_sha256() const {
+    std::lock_guard<std::mutex> lock(this->active_runtime_model_sha256_mutex_);
+    return this->active_runtime_model_sha256_;
+  }
 
   Trigger<std::string> *get_wake_word_detected_trigger() { return &this->wake_word_detected_trigger_; }
 
@@ -225,6 +230,8 @@ class MicroWakeWord : public Component
   WakeWordModel *runtime_wake_word_model_{nullptr};
   std::string runtime_model_url_;
   std::string active_runtime_wake_word_{"compiled"};
+  mutable std::mutex active_runtime_model_sha256_mutex_;
+  std::string active_runtime_model_sha256_{"unknown"};
   std::atomic<bool> runtime_model_update_in_progress_{false};
   // Written by the update worker, read by ESPHome template sensors on the main loop.
   // 0=idle, 1=updating, 2=success, 3=failed.
