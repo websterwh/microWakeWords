@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .catalog import publish
@@ -287,6 +288,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(coordinator.async_add_listener(
             lambda fn=check_auto: hass.async_create_task(fn())
         ))
+        if coordinator.adapter == "esphome":
+            # Retry as soon as a required ESPHome entity becomes available.
+            # Home Assistant may restore its registry before an ESPHome device
+            # has published its first text state.
+            roles = (CONF_TARGETS, CONF_MANIFEST)
+            ids = [configured_entities(hass, coordinator.settings)[role] for role in roles]
+            def on_entity_state_change(event, current=coordinator):
+                new_state = event.data.get("new_state")
+                old_state = event.data.get("old_state")
+                if (new_state is not None and new_state.state not in ("unavailable", "unknown")
+                        and (old_state is None or old_state.state in ("unavailable", "unknown"))):
+                    hass.async_create_task(current.async_request_refresh())
+            entry.async_on_unload(async_track_state_change_event(
+                hass, ids, on_entity_state_change
+            ))
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 
