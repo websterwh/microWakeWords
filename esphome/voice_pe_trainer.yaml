@@ -130,3 +130,19 @@ text:
     set_action:
       - lambda: |-
           id(mww).set_capture_upload_url(x);
+
+# This is synchronized by the Home Assistant trainer integration.
+# Fail closed: no capture uploads until training targets have been supplied.
+  - platform: template
+    id: capture_training_targets
+    name: "Trainer Active Wake Words"
+    icon: mdi:account-voice
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    mode: TEXT
+    max_length: 255
+    set_action:
+      - lambda: |-
+          id(mww).set_capture_training_targets(x);
