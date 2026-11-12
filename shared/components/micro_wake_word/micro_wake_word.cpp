@@ -20,6 +20,7 @@
 
 #include <esp_http_client.h>
 #include <esp_heap_caps.h>
+#include <mbedtls/sha256.h>
 
 #include <cJSON.h>
 #include <algorithm>
@@ -867,6 +868,24 @@ bool MicroWakeWord::activate_runtime_model_partition_(const esp_partition_t *par
   this->runtime_model_sequence_ = header.sequence;
   this->runtime_model_url_ = header.source_url;
   this->active_runtime_wake_word_ = header.wake_word;
+  // Hash the exact validated model bytes, not the manifest or deployment
+  // history. This also runs while restoring a previously installed A/B slot.
+  unsigned char digest[32] = {};
+  if (mbedtls_sha256(model_copy, header.model_size, digest, 0) == 0) {
+    static const char hex[] = "0123456789abcdef";
+    std::string model_hash;
+    model_hash.reserve(64);
+    for (unsigned char byte : digest) {
+      model_hash.push_back(hex[byte >> 4]);
+      model_hash.push_back(hex[byte & 0x0f]);
+    }
+    std::lock_guard<std::mutex> lock(this->active_runtime_model_sha256_mutex_);
+    this->active_runtime_model_sha256_ = std::move(model_hash);
+  } else {
+    std::lock_guard<std::mutex> lock(this->active_runtime_model_sha256_mutex_);
+    this->active_runtime_model_sha256_ = "unknown";
+  }
+
 
   if (previous_buffer != nullptr) {
     model_allocator.deallocate(previous_buffer, previous_size);
@@ -939,6 +958,10 @@ bool MicroWakeWord::restore_compiled_runtime_model_(bool erase_slots) {
   this->unmap_active_runtime_model_();
   this->runtime_model_url_.clear();
   this->active_runtime_wake_word_ = "compiled";
+  {
+    std::lock_guard<std::mutex> lock(this->active_runtime_model_sha256_mutex_);
+    this->active_runtime_model_sha256_ = "unknown";
+  }
 
   if (erase_slots && this->init_runtime_model_partitions_()) {
     for (const esp_partition_t *partition : this->runtime_model_partitions_) {
