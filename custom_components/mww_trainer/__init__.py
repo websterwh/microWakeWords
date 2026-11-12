@@ -206,9 +206,13 @@ class TrainerCoordinator(DataUpdateCoordinator):
     async def _set_text(self, role, value):
         entity_id = configured_entities(self.hass, self.settings)[role]
         current = self.hass.states.get(entity_id)
-        if current is None or current.state in ("unavailable", "unknown"):
+        if current is None or current.state == "unavailable":
             raise HomeAssistantError(f"Required trainer entity is unavailable: {entity_id}")
-        if current.state != value:
+        # ESPHome template text inputs can initially report "unknown" even
+        # while the device is connected. This is an unset *writable* value,
+        # not a reason to reject synchronization: send text.set_value to
+        # initialize it. ESPHome optimistic text publishes the new state.
+        if current.state == "unknown" or current.state != value:
             await self.hass.services.async_call(
                 "text", "set_value",
                 {"entity_id": entity_id, "value": value}, blocking=True,
