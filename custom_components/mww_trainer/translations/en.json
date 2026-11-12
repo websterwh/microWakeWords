@@ -7,7 +7,7 @@
         "data": {
           "url": "Trainer URL",
           "model": "Wake word / model name",
-          "device": "Wake-word device",
+          "device": "Wake-word devices (select multiple)",
           "extra_targets": "Additional training target phrases (optional)",
           "automatic_updates": "Automatically publish or deploy model updates"
         }
@@ -26,7 +26,7 @@
         "data": {
           "url": "Trainer URL",
           "model": "Wake word / model name",
-          "device": "Wake-word device",
+          "device": "Wake-word devices (select multiple)",
           "extra_targets": "Additional training phrases",
           "automatic_updates": "Automatic model updates"
         }
