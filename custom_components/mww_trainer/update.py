@@ -1,22 +1,30 @@
-"""Native HA update entity with explicit publisher vs deployed status."""
+"""One native update entity for each selected wake-word satellite."""
 from homeassistant.components.update import UpdateEntity, UpdateEntityFeature
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
 from .const import DOMAIN
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities([TrainerModelUpdate(hass.data[DOMAIN][entry.entry_id], entry)])
+    async_add_entities([
+        TrainerModelUpdate(coordinator, entry)
+        for coordinator in hass.data[DOMAIN][entry.entry_id]
+    ])
 
 
 class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
     _attr_has_entity_name = True
-    _attr_name = "Wake word model"
     _attr_supported_features = UpdateEntityFeature.INSTALL
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_model"
+        device = (
+            dr.async_get(coordinator.hass).async_get(coordinator.device_id)
+            if coordinator.device_id else None
+        )
+        name = (device.name_by_user or device.name) if device else "Wake-word device"
+        self._attr_name = f"{name} model"
+        self._attr_unique_id = f"{entry.entry_id}_{coordinator.device_id or 'legacy'}_model"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "microWakeWord Trainer",
@@ -38,14 +46,19 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
 
     @property
     def extra_state_attributes(self):
+        data = self.coordinator.data or {}
         if self.coordinator.adapter == "ha_catalog":
             return {
                 "delivery": "Home Assistant custom_wake_words",
                 "publication_only": True,
-                "next_step": "Restart Home Assistant, then select this wake word on the Assist satellite",
+                "next_step": "Restart Home Assistant and choose the new wake word on the satellite",
                 "device_update_confirmed": False,
             }
-        return {"delivery": "ESPHome runtime update", "device_update_confirmed": bool(self.coordinator.deployed_hash)}
+        return {
+            "delivery": "ESPHome runtime update",
+            "device_update_confirmed": bool(self.coordinator.deployed_hash),
+            "trainer_manifest_error": data.get("manifest_error"),
+        }
 
     @property
     def release_summary(self):
@@ -54,7 +67,9 @@ class TrainerModelUpdate(CoordinatorEntity, UpdateEntity):
             return None
         label = data["model"].get("label", data["model"].get("key", "unknown"))
         if self.coordinator.adapter == "ha_catalog":
-            return f"{label}: publish to Home Assistant; restart and select on device required"
+            return f"{label}: publish to Home Assistant; restart and select on device"
+        if data.get("manifest_error"):
+            return f"{label}: trainer manifest unavailable; check trainer server logs"
         return f"Trained model: {label}"
 
     async def async_install(self, version=None, backup=False, **kwargs):
