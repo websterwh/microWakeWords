@@ -58,7 +58,17 @@ class TrainerCoordinator(DataUpdateCoordinator):
 
     @property
     def installed_hash(self):
-        return self.deployed_hash if self.adapter == "esphome" else self.published_hash
+        if self.adapter == "ha_catalog":
+            return self.published_hash
+        # Trust what the firmware reports, NOT the integration's saved history.
+        # Older firmware has no hash sensor: unknown is not "update available".
+        entities = configured_entities(self.hass, self.settings)
+        entity_id = entities.get("runtime_hash_entity")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        value = state.state.strip().lower() if state else ""
+        if len(value) == 64 and all(ch in "0123456789abcdef" for ch in value):
+            return value
+        return None
 
     async def async_initialize(self):
         saved = await self.store.async_load() or {}
@@ -166,9 +176,13 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 # discovery dependent on device availability. The firmware
                 # upload allowlist defaults to empty until synchronized.
                 try:
+                    # The URL is useful even when the trainer endpoint is
+                    # temporarily returning HTTP 500. Keep it synchronized.
+                    await self._set_text(CONF_MANIFEST, manifest_url)
                     await self._set_text(CONF_TARGETS, ",".join(targets))
-                    if manifest_error is None:
-                        await self._set_text(CONF_MANIFEST, manifest_url)
+                    # Also synchronize the uploader base URL if supported.
+                    if configured_entities(self.hass, self.settings).get("trainer_url_entity"):
+                        await self._set_text("trainer_url_entity", self.settings[CONF_URL])
                 except HomeAssistantError as err:
                     device_ready = False
                     _LOGGER.info("Wake-word satellite %s not ready for synchronization: %s", self.device_id, err)
@@ -276,7 +290,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for coordinator in coordinators:
         async def check_auto(current=coordinator):
             if (current.automatic and current.last_update_success and
-                    (current.adapter != "esphome" or current.data.get("device_ready", False)) and
+                    (current.adapter != "esphome" or (
+                        current.data.get("device_ready", False)
+                        and current.installed_hash is not None
+                    )) and
                     current.installed_hash != current.data["hash"] and
                     not current._install_lock.locked()):
                 try:
