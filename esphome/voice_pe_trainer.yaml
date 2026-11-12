@@ -2,13 +2,12 @@
 # The actual micro_wake_word model and its probability_cutoff belong in the device YAML.
 substitutions:
   mww_trainer_url: "http://192.168.1.2:8789"
-  mww_model_manifest_path: "/api/trained_wake_words/alexa.esphome.json"
 
 external_components:
   - source:
       type: git
       url: https://github.com/websterwh/microWakeWords
-      ref: af694a65937dda079a7ca1da1724473c5dbf799e
+      ref: feature/runtime-model-update-status
       path: shared/components
     components:
       - micro_wake_word
@@ -154,6 +153,6 @@ text:
     entity_category: config
     optimistic: true
     restore_value: true
-    initial_value: "${mww_trainer_url}${mww_model_manifest_path}"
+    initial_value: ""
     mode: TEXT
     max_length: 255
