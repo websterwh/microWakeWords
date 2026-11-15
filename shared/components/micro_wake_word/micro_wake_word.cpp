@@ -1700,6 +1700,15 @@ void MicroWakeWord::set_capture_training_targets(const std::string &targets) {
   this->capture_training_targets_ = std::move(parsed);
 }
 
+std::string MicroWakeWord::get_capture_training_targets_text() const {
+  std::string joined;
+  for (const auto &target : this->capture_training_targets_) {
+    if (!joined.empty()) joined += ',';
+    joined += target;
+  }
+  return joined;
+}
+
 bool MicroWakeWord::is_capture_training_target_(const std::string *wake_word) const {
   if (wake_word == nullptr || this->capture_training_targets_.empty()) return false;
   // Model labels and trainer phrases may differ in capitalization.
@@ -1723,6 +1732,10 @@ bool MicroWakeWord::is_capture_training_target_(const std::string *wake_word) co
 }
 
 void MicroWakeWord::queue_detection_capture_(const DetectionEvent &detection_event, DetectionEventType event_type) {
+  if (this->capture_training_targets_.empty()) {
+    ESP_LOGD(TAG, "Wake audio capture skipped: no training targets have been supplied.");
+    return;
+  }
   if (!this->is_capture_training_target_(detection_event.wake_word)) return;
   const char *event_type_header = detection_event_type_to_header(event_type);
   if (event_type_header[0] == '\0') {

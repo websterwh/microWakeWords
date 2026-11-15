@@ -21,6 +21,18 @@ api:
         id(mww).set_capture_upload_url(id(trainer_app_url).state);
         id(mww).set_capture_training_targets(id(capture_training_targets).state);
 
+# Template text inputs have no on_value trigger: restore_value publishes the
+# restored value without firing set_action, so the component is never told it.
+# Re-apply the published entity state on a timer. Parsing a few bytes is free,
+# and it keeps captures working when the satellite boots or reconnects without
+# Home Assistant attached.
+interval:
+  - interval: 30s
+    then:
+      - lambda: |-
+          id(mww).set_capture_upload_url(id(trainer_app_url).state);
+          id(mww).set_capture_training_targets(id(capture_training_targets).state);
+
 text_sensor:
   - platform: template
     name: "Runtime Model SHA256"
@@ -46,6 +58,21 @@ text_sensor:
     lambda: |-
       const auto &active = id(mww).get_active_runtime_wake_word();
       return active.empty() ? std::string("Compiled") : active;
+    filters:
+      - lambda: |-
+          static std::string last_value;
+          if (x == last_value) return {};
+          last_value = x;
+          return x;
+
+  - platform: template
+    name: "Trainer Capture Gate"
+    id: trainer_capture_gate
+    icon: mdi:shield-key-outline
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return id(mww).get_capture_training_targets_text();
     filters:
       - lambda: |-
           static std::string last_value;

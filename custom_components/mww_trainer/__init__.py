@@ -305,20 +305,46 @@ class TrainerCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning("Could not disable wake word capture after trainer error: %s", clear_err)
             raise UpdateFailed("Unable to refresh trainer: %s" % err) from err
 
+    def _applied_targets(self):
+        """Return the allowlist the firmware actually holds, if it reports one.
+
+        The template text input is optimistic: it publishes whatever value Home
+        Assistant sent even when the firmware never applied it. That is how a
+        satellite ended up with an empty allowlist while Home Assistant was
+        certain it held the active wake word. The gate entity is derived from
+        the component's parsed allowlist, so it cannot agree by accident.
+        """
+        entity_id = configured_entities(self.hass, self.settings).get("trainer_applied_entity")
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        return state.state
+
     async def _set_text(self, role, value):
         entity_id = configured_entities(self.hass, self.settings)[role]
         current = self.hass.states.get(entity_id)
         if current is None or current.state == "unavailable":
             raise HomeAssistantError(f"Required trainer entity is unavailable: {entity_id}")
+        applied = self._applied_targets() if role == CONF_TARGETS else None
+        # The input entity's state is not proof the device applied it. Older
+        # firmware has no gate entity and keeps the previous behaviour.
+        unapplied = applied is not None and applied != value
         # ESPHome template text inputs can initially report "unknown" even
         # while the device is connected. This is an unset *writable* value,
         # not a reason to reject synchronization: send text.set_value to
         # initialize it. ESPHome optimistic text publishes the new state.
-        if current.state == "unknown" or current.state != value:
-            _LOGGER.debug(
-                "Setting %s = %r (was %r) for device %s",
-                entity_id, value, current.state, self.device_id,
-            )
+        if current.state == "unknown" or current.state != value or unapplied:
+            if unapplied and current.state == value:
+                _LOGGER.info(
+                    "Device %s holds training targets %r but the trainer selection "
+                    "is %r; %s disagreed, resynchronizing the upload allowlist",
+                    self.device_id, applied, value, entity_id,
+                )
+            else:
+                _LOGGER.debug(
+                    "Setting %s = %r (was %r, applied %r) for device %s",
+                    entity_id, value, current.state, applied, self.device_id,
+                )
             await self.hass.services.async_call(
                 "text", "set_value",
                 {"entity_id": entity_id, "value": value}, blocking=True,
@@ -487,6 +513,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ids = [entities[role] for role in (CONF_TARGETS, CONF_MANIFEST)]
             if entities.get("runtime_hash_entity"):
                 ids.append(entities["runtime_hash_entity"])
+            if entities.get("trainer_applied_entity"):
+                ids.append(entities["trainer_applied_entity"])
             async def on_entity_state_change(event, current=coordinator):
                 new_state = event.data.get("new_state")
                 old_state = event.data.get("old_state")
@@ -505,6 +533,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "ESPHome entity %s came back from unavailable (now %r); "
                         "requesting coordinator refresh for %s",
                         event.data.get("entity_id"), new_s, current.device_id,
+                    )
+                    await current.async_request_refresh()
+                # The firmware's own view of the allowlist is authoritative.
+                # If it changes, verify it against the trainer selection.
+                if (
+                    event.data.get("entity_id")
+                    == configured_entities(hass, current.settings).get("trainer_applied_entity")
+                    and new_s is not None
+                    and old_s != new_s
+                ):
+                    _LOGGER.debug(
+                        "Device %s applied training targets %r (was %r); "
+                        "requesting coordinator refresh",
+                        current.device_id, new_s, old_s,
                     )
                     await current.async_request_refresh()
                 # Fingerprint changes (including a manual model deployment

@@ -45,6 +45,7 @@ def direct_entities(hass, device_id):
     for role, domain, words in (
         ("runtime_hash_entity", "sensor", ("runtime", "model", "sha256")),
         ("trainer_url_entity", "text", ("trainer", "app", "url")),
+        ("trainer_applied_entity", "text_sensor", ("trainer", "capture", "gate")),
     ):
         matches = [
             item.entity_id for item in entities

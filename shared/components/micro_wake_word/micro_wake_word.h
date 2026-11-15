@@ -121,6 +121,8 @@ class MicroWakeWord : public Component
   void set_wake_word_probability_cutoff(uint8_t probability_cutoff);
   // Comma-separated training targets supplied by the trainer integration. Empty = no uploads.
   void set_capture_training_targets(const std::string &targets);
+  // The allowlist actually in effect, comma-separated. Empty means no uploads.
+  std::string get_capture_training_targets_text() const;
   bool is_capture_training_target_(const std::string *wake_word) const;
   void set_capture_upload_url(const std::string &capture_upload_url) { this->capture_upload_url_ = capture_upload_url; }
   const std::string &get_capture_upload_url() const { return this->capture_upload_url_; }
