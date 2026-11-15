@@ -222,8 +222,12 @@ class TrainerCoordinator(DataUpdateCoordinator):
             key = str(model.get("key") or "")
             if not key or not all(ch.isalnum() or ch in "_-" for ch in key):
                 raise UpdateFailed("Unsafe model key returned by trainer")
-            if not model.get("esphome_json_url"):
-                raise UpdateFailed("Selected model has no ESPHome manifest")
+            # A missing manifest URL is not fatal. The path is built from the
+            # trusted trainer origin below, and the literal model file is still
+            # downloadable; only deploying a model needs the manifest, and the
+            # update entity reports that failure on its own. Treating it as a
+            # trainer failure used to blank the upload allowlist and stop
+            # wake-word captures with no visible reason.
             # Construct URLs using the trusted configured trainer origin rather
             # than following catalog-advertised URLs to arbitrary hosts.
             manifest_path = "/api/trained_wake_words/" + quote(key + ".esphome.json")
@@ -296,13 +300,17 @@ class TrainerCoordinator(DataUpdateCoordinator):
             }
         except (ClientError, asyncio.TimeoutError, ValueError, KeyError, UpdateFailed,
                 UnsupportedDevice) as err:
-            # When the trainer goes unavailable, do not leave a stale target
-            # allowlist active on ESPHome's direct upload implementation.
-            try:
-                if self.adapter == "esphome":
-                    await self._set_text(CONF_TARGETS, "")
-            except (HomeAssistantError, UnsupportedDevice, ValueError) as clear_err:
-                _LOGGER.warning("Could not disable wake word capture after trainer error: %s", clear_err)
+            # Leave the device's upload allowlist alone. Blanking it on a
+            # trainer hiccup is what silently stopped wake-word captures: the
+            # firmware fails closed on an empty allowlist, and the trainer was
+            # the only thing that could have refilled it. Captures can only ever
+            # go to the trainer's HTTP endpoint anyway, so a stale entry while
+            # the trainer is briefly down costs nothing, and the previous value
+            # is what the user actually selected.
+            _LOGGER.warning(
+                "Trainer refresh failed for %s; keeping the device's existing "
+                "upload allowlist: %s", self.device_id, err,
+            )
             raise UpdateFailed("Unable to refresh trainer: %s" % err) from err
 
     def _applied_targets(self):
