@@ -6,11 +6,11 @@
 #include "streaming_model.h"
 
 #include "esphome/components/microphone/microphone_source.h"
+#include "esphome/components/ring_buffer/ring_buffer.h"
 
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/defines.h"
-#include "esphome/core/ring_buffer.h"
 
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -31,6 +31,10 @@
 
 namespace esphome {
 namespace micro_wake_word {
+
+// The core header was only a shim and is gone in 2026.11.0; the component
+// header it forwarded to exists on 2026.10 as well, so this works on both.
+using ring_buffer::RingBuffer;
 
 enum State {
   STARTING,

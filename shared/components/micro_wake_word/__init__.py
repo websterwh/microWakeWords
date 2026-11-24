@@ -32,6 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CODEOWNERS = ["@kahrendt", "@jesserockz"]
 DEPENDENCIES = ["microphone", "network"]
+AUTO_LOAD = ["ring_buffer"]
 
 DOMAIN = "micro_wake_word"
 
