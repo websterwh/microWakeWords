@@ -337,7 +337,7 @@ void MicroWakeWord::setup() {
   this->init_runtime_model_partitions_();
   this->load_runtime_model_from_flash_();
 
-  this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
+  this->microphone_source_->add_data_callback([this](const microphone::AudioCapture &capture) {
     if (this->state_ == State::STOPPED) {
       return;
     }
@@ -345,18 +345,18 @@ void MicroWakeWord::setup() {
     if (this->ring_buffer_.use_count() > 1) {
       size_t bytes_free = temp_ring_buffer->free();
 
-      if (bytes_free < data.size()) {
+      if (bytes_free < capture.data.size()) {
         xEventGroupSetBits(this->event_group_, EventGroupBits::WARNING_FULL_RING_BUFFER);
         temp_ring_buffer->reset();
       }
-      temp_ring_buffer->write((void *) data.data(), data.size());
+      temp_ring_buffer->write((void *) capture.data.data(), capture.data.size());
     }
 
     std::shared_ptr<RingBuffer> temp_capture_ring_buffer = this->capture_ring_buffer_;
     // Keep the rolling capture buffer warm whenever detection is running so the first
     // wake after enabling uploads or reconnecting still has pre-roll audio available.
     if (temp_capture_ring_buffer != nullptr) {
-      temp_capture_ring_buffer->write((void *) data.data(), data.size());
+      temp_capture_ring_buffer->write((void *) capture.data.data(), capture.data.size());
     }
   });
 
@@ -382,32 +382,30 @@ void MicroWakeWord::inference_task(void *params) {
 
   {  // Ensures any C++ objects fall out of scope to deallocate before deleting the task
 
-    const size_t new_bytes_to_process =
-        this_mww->microphone_source_->get_audio_stream_info().ms_to_bytes(this_mww->features_step_size_);
-    std::unique_ptr<audio::AudioSourceTransferBuffer> audio_buffer;
+    const auto &stream_info = this_mww->microphone_source_->get_audio_stream_info();
+    const size_t bytes_per_frame = stream_info.frames_to_bytes(1);
+    const size_t new_bytes_to_process = stream_info.ms_to_bytes(this_mww->features_step_size_);
+    std::unique_ptr<audio::RingBufferAudioSource> audio_source;
     int8_t features_buffer[PREPROCESSOR_FEATURE_SIZE];
 
     if (!(xEventGroupGetBits(this_mww->event_group_) & ERROR_BITS)) {
-      // Allocate audio transfer buffer
-      audio_buffer = audio::AudioSourceTransferBuffer::create(new_bytes_to_process);
-
-      if (audio_buffer == nullptr) {
-        xEventGroupSetBits(this_mww->event_group_, EventGroupBits::ERROR_MEMORY);
-      }
-    }
-
-    if (!(xEventGroupGetBits(this_mww->event_group_) & ERROR_BITS)) {
-      // Allocate ring buffer
-      std::shared_ptr<RingBuffer> temp_ring_buffer = RingBuffer::create(
-          this_mww->microphone_source_->get_audio_stream_info().ms_to_bytes(RING_BUFFER_DURATION_MS));
+      // Allocate ring buffer, then the frame-aligned source that reads it
+      std::shared_ptr<RingBuffer> temp_ring_buffer =
+          RingBuffer::create(stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS));
       if (temp_ring_buffer.use_count() == 0) {
         xEventGroupSetBits(this_mww->event_group_, EventGroupBits::ERROR_MEMORY);
+      } else {
+        audio_source = audio::RingBufferAudioSource::create(temp_ring_buffer, new_bytes_to_process,
+                                                            static_cast<uint8_t>(bytes_per_frame));
+        if (audio_source == nullptr) {
+          xEventGroupSetBits(this_mww->event_group_, EventGroupBits::ERROR_MEMORY);
+        } else {
+          this_mww->ring_buffer_ = temp_ring_buffer;
+        }
       }
-      audio_buffer->set_source(temp_ring_buffer);
-      this_mww->ring_buffer_ = temp_ring_buffer;
 
-      std::shared_ptr<RingBuffer> temp_capture_ring_buffer = RingBuffer::create(
-          this_mww->microphone_source_->get_audio_stream_info().ms_to_bytes(CAPTURE_RING_BUFFER_DURATION_MS));
+      std::shared_ptr<RingBuffer> temp_capture_ring_buffer =
+          RingBuffer::create(stream_info.ms_to_bytes(CAPTURE_RING_BUFFER_DURATION_MS));
       if (temp_capture_ring_buffer.use_count() == 0) {
         ESP_LOGW(TAG, "Failed to allocate captured audio ring buffer; wake audio uploads will be unavailable.");
       } else {
@@ -419,27 +417,34 @@ void MicroWakeWord::inference_task(void *params) {
       this_mww->microphone_source_->start();
       xEventGroupSetBits(this_mww->event_group_, EventGroupBits::TASK_RUNNING);
 
-      while (!(xEventGroupGetBits(this_mww->event_group_) & COMMAND_STOP)) {
-        audio_buffer->transfer_data_from_source(pdMS_TO_TICKS(DATA_TIMEOUT_MS));
+      while (!(xEventGroupGetBits(this_mww->event_group_) & (COMMAND_STOP | ERROR_BITS))) {
+        audio_source->fill(pdMS_TO_TICKS(DATA_TIMEOUT_MS));
 
-        if (audio_buffer->available() < new_bytes_to_process) {
-          // Insufficient data to generate new spectrogram features, read more next iteration
-          continue;
+        // Drain every exposure; RingBufferAudioSource refuses a new fill() until the current one is consumed.
+        while (audio_source->available() >= sizeof(int16_t)) {
+          size_t processed_samples = 0;
+          const bool feature_generated = this_mww->generate_features_(
+              reinterpret_cast<const int16_t *>(audio_source->data()),
+              audio_source->available() / sizeof(int16_t), features_buffer, &processed_samples);
+          audio_source->consume(processed_samples * sizeof(int16_t));
+
+          if (processed_samples == 0) {
+            // The frontend needs more audio before it consumes any; wait for the next fill instead of spinning.
+            break;
+          }
+          if (!feature_generated) {
+            continue;
+          }
+
+          // Run inference using the new spectrogram features
+          if (!this_mww->update_model_probabilities_(features_buffer)) {
+            xEventGroupSetBits(this_mww->event_group_, EventGroupBits::ERROR_INFERENCE);
+            break;
+          }
+
+          // Process each model's probabilities and possibly send a Detection Event to the queue
+          this_mww->process_probabilities_();
         }
-
-        // Generate new spectrogram features
-        uint32_t processed_samples = this_mww->generate_features_(
-            (int16_t *) audio_buffer->get_buffer_start(), audio_buffer->available() / sizeof(int16_t), features_buffer);
-        audio_buffer->decrease_buffer_length(processed_samples * sizeof(int16_t));
-
-        // Run inference using the new spectorgram features
-        if (!this_mww->update_model_probabilities_(features_buffer)) {
-          xEventGroupSetBits(this_mww->event_group_, EventGroupBits::ERROR_INFERENCE);
-          break;
-        }
-
-        // Process each model's probabilities and possibly send a Detection Event to the queue
-        this_mww->process_probabilities_();
       }
     }
   }
@@ -581,7 +586,7 @@ void MicroWakeWord::loop() {
         // uses floating point operations.
         if (!FrontendPopulateState(&this->frontend_config_, &this->frontend_state_,
                                    this->microphone_source_->get_audio_stream_info().get_sample_rate())) {
-          this->status_momentary_error("frontend_alloc", 1000);
+          this->status_momentary_error(1000);
           return;
         }
 
@@ -590,7 +595,7 @@ void MicroWakeWord::loop() {
 
         if (this->inference_task_handle_ == nullptr) {
           FrontendFreeStateContents(&this->frontend_state_);  // Deallocate frontend state
-          this->status_momentary_error("task_start", 1000);
+          this->status_momentary_error(1000);
         }
       }
       break;
@@ -837,7 +842,7 @@ bool MicroWakeWord::activate_runtime_model_partition_(const esp_partition_t *par
   RAMAllocator<uint8_t> model_allocator;
   uint8_t *model_copy = model_allocator.allocate(header.model_size);
   if (model_copy == nullptr) {
-    ESP_LOGW(TAG, "Failed to allocate %u bytes for runtime microWakeWord model '%s'.", header.model_size,
+    ESP_LOGW(TAG, "Failed to allocate %zu bytes for runtime microWakeWord model '%s'.", header.model_size,
              header.wake_word);
     esp_partition_munmap(mmap_handle);
     return false;
@@ -1449,11 +1454,12 @@ void MicroWakeWord::runtime_model_update_task(void *params) {
   vTaskDelete(nullptr);
 }
 
-size_t MicroWakeWord::generate_features_(int16_t *audio_buffer, size_t samples_available,
-                                         int8_t features_buffer[PREPROCESSOR_FEATURE_SIZE]) {
-  size_t processed_samples = 0;
+bool MicroWakeWord::generate_features_(const int16_t *audio_buffer, size_t samples_available,
+                                       int8_t features_buffer[PREPROCESSOR_FEATURE_SIZE],
+                                       size_t *processed_samples) {
+  *processed_samples = 0;
   struct FrontendOutput frontend_output =
-      FrontendProcessSamples(&this->frontend_state_, audio_buffer, samples_available, &processed_samples);
+      FrontendProcessSamples(&this->frontend_state_, audio_buffer, samples_available, processed_samples);
 
   for (size_t i = 0; i < frontend_output.size; ++i) {
     // These scaling values are set to match the TFLite audio frontend int8 output.
@@ -1478,7 +1484,7 @@ size_t MicroWakeWord::generate_features_(int16_t *audio_buffer, size_t samples_a
     features_buffer[i] = static_cast<int8_t>(clamp<int32_t>(value, INT8_MIN, INT8_MAX));
   }
 
-  return processed_samples;
+  return frontend_output.size > 0;
 }
 
 void MicroWakeWord::process_probabilities_() {
