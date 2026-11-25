@@ -42,6 +42,7 @@ enum class DetectionEventType : uint8_t {
 
 struct DetectionEvent {
   std::string *wake_word{nullptr};
+  const std::string *id{nullptr};
   bool detected{false};
   bool partially_detection{false};  // Set if the close-miss capture threshold is crossed without a wake trigger.
   uint8_t max_probability{0};

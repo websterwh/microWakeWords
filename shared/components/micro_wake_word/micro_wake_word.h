@@ -28,6 +28,7 @@
 #include <memory>
 #include <mutex>
 #include <cstdlib>
+#include <utility>
 
 namespace esphome {
 namespace micro_wake_word {
@@ -142,6 +143,11 @@ class MicroWakeWord : public Component
 
   Trigger<std::string> *get_wake_word_detected_trigger() { return &this->wake_word_detected_trigger_; }
 
+  /// The event's string pointers are only valid during the call.
+  template<typename F> void add_on_wake_word_detected_callback(F &&callback) {
+    this->wake_word_detected_callback_.add(std::forward<F>(callback));
+  }
+
   void add_wake_word_model(WakeWordModel *model);
 
 #ifdef USE_MICRO_WAKE_WORD_VAD
@@ -150,6 +156,19 @@ class MicroWakeWord : public Component
 
   // Intended for the voice assistant component to fetch VAD status
   bool get_vad_state() { return this->vad_state_; }
+
+  // The voice assistant disables the VAD while it buffers its own wake-word
+  // audio, so true detections are not blocked at the lower cutoffs.
+  void set_vad_enabled(bool enabled) {
+    if (this->vad_model_ == nullptr) {
+      return;
+    }
+    if (enabled) {
+      this->vad_model_->enable();
+    } else {
+      this->vad_model_->disable();
+    }
+  }
 #endif
 
   // Intended for the voice assistant component to access which wake words are available
@@ -159,6 +178,7 @@ class MicroWakeWord : public Component
  protected:
   microphone::MicrophoneSource *microphone_source_{nullptr};
   Trigger<std::string> wake_word_detected_trigger_;
+  LazyCallbackManager<void(const DetectionEvent &)> wake_word_detected_callback_;
   State state_{State::STOPPED};
 
   std::weak_ptr<RingBuffer> ring_buffer_;

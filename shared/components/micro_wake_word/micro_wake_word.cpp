@@ -623,6 +623,7 @@ void MicroWakeWord::loop() {
                    detection_profile_to_string(detection_event.detection_profile),
                    detection_event.active_window_count, detection_event.min_active_windows, detection_event.rise_score);
           this->queue_detection_capture_(detection_event, DetectionEventType::WAKE_DETECTED);
+          this->wake_word_detected_callback_.call(detection_event);
           this->wake_word_detected_trigger_.trigger(*detection_event.wake_word);
           if (this->stop_after_detection_) {
             this->stop();

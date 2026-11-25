@@ -545,6 +545,7 @@ void WakeWordModel::disable() {
 DetectionEvent WakeWordModel::determine_detected() {
   DetectionEvent detection_event;
   detection_event.wake_word = &this->wake_word_;
+  detection_event.id = &this->id_;
   detection_event.max_probability = 0;
   detection_event.average_probability = 0;
 
